@@ -1,0 +1,10 @@
+{
+  "name": "YucaFish — Bitácora de pesca",
+  "short_name": "YucaFish",
+  "description": "Tu bitácora personal de pesca",
+  "start_url": "/app",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#0d73eb",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
