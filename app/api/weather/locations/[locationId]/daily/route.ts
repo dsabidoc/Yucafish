@@ -24,6 +24,7 @@ export async function GET(
     return NextResponse.json({
       location: forecast.location,
       daily: forecast.daily,
+      dailyFishingOutlooks: forecast.dailyFishingOutlooks,
       fetchedAt: forecast.fetchedAt,
       isStale: forecast.isStale,
     });

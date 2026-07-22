@@ -2,6 +2,7 @@ import { database, ensureDatabase, mapRow, now } from "@/db/runtime";
 import { fetchMarine, fetchWeather } from "./client";
 import { weatherConfig } from "./config";
 import {
+  buildDailyFishingOutlooks,
   fishingCondition,
   joinHourly,
   mapMarine,
@@ -252,6 +253,7 @@ export async function getPortForecast(
     [general?.expiresAt, marine?.expiresAt].filter(Boolean).sort().at(0) ??
     fetchedAt;
   const rules = await thresholds();
+  const joinedHourly = joinHourly(mappedWeather.hourly, mappedMarine.hourly);
   return {
     location: {
       id: location.id,
@@ -260,8 +262,13 @@ export async function getPortForecast(
     },
     currentWeather: mappedWeather.current,
     currentMarine: mappedMarine.current,
-    hourly: joinHourly(mappedWeather.hourly, mappedMarine.hourly),
+    hourly: joinedHourly,
     daily: mappedWeather.daily,
+    dailyFishingOutlooks: buildDailyFishingOutlooks(
+      mappedWeather.daily,
+      joinedHourly,
+      rules,
+    ),
     fetchedAt,
     cachedUntil,
     provider: "open-meteo",

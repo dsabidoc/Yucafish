@@ -45,6 +45,8 @@ La versión actual recibe DB, R2 e identidad desde Sites. `.env.example` documen
 
 YucaFish consulta desde su backend los endpoints oficiales de [pronóstico](https://open-meteo.com/en/docs) y [condiciones marinas](https://open-meteo.com/en/docs/marine-weather-api) de Open-Meteo. El navegador solo envía el identificador de un puerto; las coordenadas, URLs del proveedor y cualquier futura clave se resuelven en el servidor. La integración fue revisada contra la documentación y los términos vigentes el 22 de julio de 2026.
 
+La vista permite seleccionar cualquiera de los 12 puertos configurados y una fecha dentro de los siete días disponibles. Cada día combina clima y mar, muestra horas recomendadas y un indicador orientativo: rojo (complicado), amarillo (precaución), verde (favorable) o azul (ideal). El indicador no garantiza capturas ni sustituye avisos oficiales de navegación o seguridad.
+
 Se solicitan temperatura, sensación térmica, humedad, lluvia, nubosidad, visibilidad, viento, ráfagas, amanecer y atardecer; para mar se solicitan oleaje, swell, temperatura superficial, corrientes y nivel del mar. Los valores ausentes permanecen como `null` y se muestran como “No disponible”. Las series se normalizan y unen por su hora ISO en `America/Merida`.
 
 ```env

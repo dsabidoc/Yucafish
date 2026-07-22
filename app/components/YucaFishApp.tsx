@@ -152,13 +152,7 @@ type AppData = {
   logs: Array<Record<string, string>>;
 };
 type View =
-  | "dashboard"
-  | "history"
-  | "stats"
-  | "weather"
-  | "profile"
-  | "admin"
-  | "trip";
+  "dashboard" | "history" | "stats" | "weather" | "profile" | "admin" | "trip";
 
 const emptyData: AppData = {
   profile: {
@@ -1050,10 +1044,21 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
   const [locationId, setLocationId] = useState(initial);
   const [query, setQuery] = useState("");
   const [forecast, setForecast] = useState<PortForecast | null>(null);
+  const [selectedDate, setSelectedDate] = useState("");
   const [loading, setLoading] = useState(Boolean(initial));
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"hours" | "days" | "charts">("hours");
+  const [tab, setTab] = useState<"selected" | "hours" | "days" | "charts">(
+    "selected",
+  );
   const [cooldown, setCooldown] = useState(false);
+  const acceptForecast = (body: PortForecast) => {
+    setForecast(body);
+    setSelectedDate((current) =>
+      body.daily.some((day) => day.date === current)
+        ? current
+        : body.daily[0]?.date || "",
+    );
+  };
   const loadForecast = async () => {
     if (!locationId) return;
     setLoading(true);
@@ -1066,7 +1071,7 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
       const body = (await response.json()) as PortForecast & { error?: string };
       if (!response.ok)
         throw new Error(body.error || "No pudimos consultar las condiciones.");
-      setForecast(body);
+      acceptForecast(body);
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -1095,7 +1100,7 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
         return body;
       })
       .then((body) => {
-        setForecast(body);
+        acceptForecast(body);
         setError("");
       })
       .catch((reason: unknown) => {
@@ -1132,6 +1137,20 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
   }, [forecast]);
   const weather = forecast?.currentWeather;
   const marine = forecast?.currentMarine;
+  const selectedDaily = forecast?.daily.find(
+    (day) => day.date === selectedDate,
+  );
+  const selectedOutlook = forecast?.dailyFishingOutlooks.find(
+    (day) => day.date === selectedDate,
+  );
+  const selectedHours = useMemo(
+    () =>
+      forecast?.hourly.filter((item) => {
+        const hour = Number(item.time.slice(11, 13));
+        return item.time.startsWith(selectedDate) && hour >= 5 && hour <= 18;
+      }) || [],
+    [forecast, selectedDate],
+  );
   const condition = weather
     ? wmoCondition(weather.weatherCode, weather.isDay ?? true)
     : null;
@@ -1146,7 +1165,7 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
       <PageHeader
         eyebrow="Pronóstico para navegar mejor informado"
         title="Clima y condiciones del mar"
-        subtitle="Datos actuales, viento, oleaje y pronóstico de siete días por puerto."
+        subtitle="Elige un puerto y una fecha para revisar clima, mar y qué tan favorables se ven las condiciones."
         action={
           <button
             className="button secondary"
@@ -1182,6 +1201,24 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
             </option>
           ))}
         </select>
+        <label className="weather-date-field">
+          <CalendarDays size={18} />
+          <select
+            value={selectedDate}
+            onChange={(event) => {
+              setSelectedDate(event.target.value);
+              setTab("selected");
+            }}
+            aria-label="Fecha del pronóstico"
+            disabled={!forecast?.daily.length}
+          >
+            {(forecast?.daily || []).map((day) => (
+              <option key={day.date} value={day.date}>
+                {formatDate(day.date, true)}
+              </option>
+            ))}
+          </select>
+        </label>
         <span>
           <MapPin />
           {available.find((port) => port.id === locationId)?.name ||
@@ -1320,6 +1357,12 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
               aria-label="Tipo de pronóstico"
             >
               <button
+                className={tab === "selected" ? "active" : ""}
+                onClick={() => setTab("selected")}
+              >
+                Día seleccionado
+              </button>
+              <button
                 className={tab === "hours" ? "active" : ""}
                 onClick={() => setTab("hours")}
               >
@@ -1338,6 +1381,189 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
                 Gráficas
               </button>
             </div>
+            {tab === "selected" && selectedDaily && selectedOutlook && (
+              <section className="selected-day-panel">
+                <div className="card selected-day-summary">
+                  <div className="selected-day-heading">
+                    <div>
+                      <small>PRONÓSTICO PARA</small>
+                      <h2>{formatDate(selectedDaily.date, true)}</h2>
+                      <p>
+                        {wmoCondition(selectedDaily.weatherCode).label} en{" "}
+                        {forecast.location.name}
+                      </p>
+                    </div>
+                    <div
+                      className={`condition-badge ${selectedOutlook.condition.level.toLowerCase()}`}
+                      aria-label={`Indicador: ${selectedOutlook.condition.label}`}
+                    >
+                      <ShieldCheck />
+                      {selectedOutlook.condition.label}
+                      <small>
+                        {selectedOutlook.condition.reasons.join(" · ") ||
+                          "Indicador orientativo"}
+                      </small>
+                    </div>
+                  </div>
+                  <div
+                    className="fishing-traffic-light"
+                    aria-label="Escala del indicador de pesca"
+                  >
+                    <span className="difficult">
+                      <i />
+                      Rojo <small>Complicado</small>
+                    </span>
+                    <span className="caution">
+                      <i />
+                      Amarillo <small>Precaución</small>
+                    </span>
+                    <span className="favorable">
+                      <i />
+                      Verde <small>Favorable</small>
+                    </span>
+                    <span className="ideal">
+                      <i />
+                      Azul <small>Ideal</small>
+                    </span>
+                  </div>
+                  <div className="selected-day-metrics">
+                    <WeatherMetric
+                      icon={Thermometer}
+                      label="Temperatura"
+                      value={`${metric(selectedDaily.temperatureMinC, "°C")} – ${metric(selectedDaily.temperatureMaxC, "°C")}`}
+                    />
+                    <WeatherMetric
+                      icon={Thermometer}
+                      label="Sensación"
+                      value={`${metric(selectedDaily.apparentTemperatureMinC, "°C")} – ${metric(selectedDaily.apparentTemperatureMaxC, "°C")}`}
+                    />
+                    <WeatherMetric
+                      icon={CloudRain}
+                      label="Probabilidad de lluvia"
+                      value={metric(
+                        selectedDaily.precipitationProbabilityMaxPercent,
+                        "%",
+                      )}
+                    />
+                    <WeatherMetric
+                      icon={Droplets}
+                      label="Lluvia acumulada"
+                      value={metric(selectedDaily.precipitationSumMm, "mm")}
+                    />
+                    <WeatherMetric
+                      icon={Wind}
+                      label="Viento máximo"
+                      value={directionMetric(
+                        selectedDaily.windSpeedMaxKmh,
+                        selectedDaily.windDirectionDominantDegrees,
+                        "km/h",
+                      )}
+                    />
+                    <WeatherMetric
+                      icon={Wind}
+                      label="Ráfaga máxima"
+                      value={metric(selectedDaily.windGustMaxKmh, "km/h")}
+                    />
+                    <WeatherMetric
+                      icon={Waves}
+                      label="Ola máxima"
+                      value={metric(selectedOutlook.waveHeightMaxMeters, "m")}
+                    />
+                    <WeatherMetric
+                      icon={Waves}
+                      label="Oleaje promedio"
+                      value={metric(
+                        selectedOutlook.waveHeightAverageMeters,
+                        "m",
+                      )}
+                    />
+                    <WeatherMetric
+                      icon={Gauge}
+                      label="Periodo mínimo"
+                      value={metric(selectedOutlook.wavePeriodMinSeconds, "s")}
+                    />
+                    <WeatherMetric
+                      icon={Waves}
+                      label="Mar de fondo"
+                      value={metric(selectedOutlook.swellHeightMaxMeters, "m")}
+                    />
+                    <WeatherMetric
+                      icon={Thermometer}
+                      label="Temperatura del mar"
+                      value={metric(
+                        selectedOutlook.seaSurfaceTemperatureAverageC,
+                        "°C",
+                      )}
+                    />
+                    <WeatherMetric
+                      icon={Compass}
+                      label="Corriente máxima"
+                      value={metric(
+                        selectedOutlook.currentVelocityMaxKmh,
+                        "km/h",
+                      )}
+                    />
+                    <WeatherMetric
+                      icon={Sunrise}
+                      label="Amanecer"
+                      value={timeOnly(selectedDaily.sunrise)}
+                    />
+                    <WeatherMetric
+                      icon={Sunset}
+                      label="Atardecer"
+                      value={timeOnly(selectedDaily.sunset)}
+                    />
+                  </div>
+                  <div className="best-fishing-hours">
+                    <div>
+                      <strong>Mejores horas estimadas</strong>
+                      <small>
+                        Entre las 05:00 y las 18:00, según el semáforo.
+                      </small>
+                    </div>
+                    <span>
+                      {selectedOutlook.bestHours.length ? (
+                        selectedOutlook.bestHours.map((time) => (
+                          <b key={time}>{hourLabel(time)}</b>
+                        ))
+                      ) : (
+                        <em>No se identificaron horas favorables.</em>
+                      )}
+                    </span>
+                  </div>
+                </div>
+                <div
+                  className="selected-day-hours"
+                  aria-label={`Detalle horario de ${formatDate(selectedDaily.date, true)}`}
+                >
+                  {selectedHours.map((item) => (
+                    <article className="card hourly-card" key={item.time}>
+                      <time>{hourLabel(item.time)}</time>
+                      <CloudSun />
+                      <b>{metric(item.weather?.temperatureC, "°")}</b>
+                      <span>
+                        <CloudRain />
+                        {metric(
+                          item.weather?.precipitationProbabilityPercent,
+                          "%",
+                        )}
+                      </span>
+                      <span>
+                        <Wind />
+                        {metric(item.weather?.windSpeedKmh, "km/h")}
+                      </span>
+                      <span>
+                        <Waves />
+                        {metric(item.marine?.waveHeightMeters, "m")}
+                      </span>
+                      <small>
+                        {metric(item.marine?.wavePeriodSeconds, "s")}
+                      </small>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
             {tab === "hours" && (
               <section
                 className="hourly-scroll"
@@ -1437,10 +1663,14 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
             <div className="weather-safety">
               <ShieldCheck />
               <p>
-                <b>Información meteorológica orientativa.</b> Las condiciones
-                pueden cambiar rápidamente. Consulta los avisos oficiales, la
-                Capitanía de Puerto y las autoridades correspondientes antes de
-                navegar.
+                <b>
+                  Estos semáforos e indicadores son únicamente orientativos.
+                </b>{" "}
+                YucaFish no garantiza una pesca exitosa ni se responsabiliza por
+                decisiones de navegación, pesca o seguridad tomadas con esta
+                información. Las condiciones pueden cambiar rápidamente;
+                consulta siempre los avisos oficiales, la Capitanía de Puerto y
+                las autoridades correspondientes antes de salir.
               </p>
             </div>
             <p className="weather-attribution">

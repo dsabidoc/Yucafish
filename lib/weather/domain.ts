@@ -1,5 +1,6 @@
 import type {
   ConditionThresholds,
+  DailyFishingOutlook,
   DailyForecast,
   MarineCondition,
   PortForecast,
@@ -309,6 +310,12 @@ export function fishingCondition(
     weather.visibilityMeters < 1000
   )
     difficult.push("Visibilidad reducida");
+  if (
+    weather?.precipitationProbabilityPercent !== null &&
+    weather?.precipitationProbabilityPercent !== undefined &&
+    weather.precipitationProbabilityPercent >= 70
+  )
+    caution.push("Alta probabilidad de lluvia");
   if (difficult.length)
     return {
       level: "DIFFICULT",
@@ -317,9 +324,125 @@ export function fishingCondition(
     };
   if (caution.length)
     return { level: "CAUTION", label: "Precaución", reasons: caution };
+  const ideal =
+    (weather?.weatherCode ?? 99) <= 2 &&
+    (weather?.precipitationProbabilityPercent ?? 100) <= 20 &&
+    (weather?.windSpeedKmh ?? Number.POSITIVE_INFINITY) <=
+      thresholds.maximumFavorableWindKmh * 0.65 &&
+    (weather?.windGustKmh ?? Number.POSITIVE_INFINITY) <=
+      thresholds.maximumFavorableGustKmh * 0.75 &&
+    (marine?.waveHeightMeters ?? Number.POSITIVE_INFINITY) <=
+      thresholds.maximumFavorableWaveMeters * 0.65 &&
+    (marine?.wavePeriodSeconds ?? 0) >=
+      thresholds.minimumFavorableWavePeriodSeconds + 1;
+  if (ideal)
+    return {
+      level: "IDEAL",
+      label: "Ideal para pescar",
+      reasons: ["Viento suave", "Oleaje bajo", "Lluvia poco probable"],
+    };
   return {
     level: "FAVORABLE",
     label: "Condiciones favorables",
     reasons: ["Dentro de los umbrales configurados"],
   };
+}
+
+const finiteValues = (values: Array<number | null | undefined>) =>
+  values.filter((item): item is number => item !== null && item !== undefined);
+const maximum = (values: Array<number | null | undefined>) => {
+  const present = finiteValues(values);
+  return present.length ? Math.max(...present) : null;
+};
+const minimum = (values: Array<number | null | undefined>) => {
+  const present = finiteValues(values);
+  return present.length ? Math.min(...present) : null;
+};
+const average = (values: Array<number | null | undefined>) => {
+  const present = finiteValues(values);
+  return present.length
+    ? present.reduce((total, item) => total + item, 0) / present.length
+    : null;
+};
+
+export function buildDailyFishingOutlooks(
+  daily: DailyForecast[],
+  hourly: ReturnType<typeof joinHourly>,
+  thresholds: ConditionThresholds,
+): DailyFishingOutlook[] {
+  return daily.map((day) => {
+    const dayHours = hourly.filter((item) => {
+      const hour = Number(item.time.slice(11, 13));
+      return item.time.startsWith(day.date) && hour >= 5 && hour <= 18;
+    });
+    const weather: WeatherCondition = {
+      observedAt: `${day.date}T12:00`,
+      temperatureC: null,
+      apparentTemperatureC: null,
+      humidityPercent: null,
+      precipitationMm: day.precipitationSumMm,
+      precipitationProbabilityPercent: day.precipitationProbabilityMaxPercent,
+      weatherCode: day.weatherCode,
+      cloudCoverPercent: null,
+      visibilityMeters: minimum(
+        dayHours.map((item) => item.weather?.visibilityMeters),
+      ),
+      windSpeedKmh: day.windSpeedMaxKmh,
+      windDirectionDegrees: day.windDirectionDominantDegrees,
+      windGustKmh: day.windGustMaxKmh,
+      isDay: true,
+    };
+    const marine: MarineCondition = {
+      observedAt: `${day.date}T12:00`,
+      waveHeightMeters: maximum(
+        dayHours.map((item) => item.marine?.waveHeightMeters),
+      ),
+      waveDirectionDegrees: null,
+      wavePeriodSeconds: minimum(
+        dayHours.map((item) => item.marine?.wavePeriodSeconds),
+      ),
+      wavePeakPeriodSeconds: null,
+      swellHeightMeters: maximum(
+        dayHours.map((item) => item.marine?.swellHeightMeters),
+      ),
+      swellDirectionDegrees: null,
+      swellPeriodSeconds: null,
+      seaSurfaceTemperatureC: average(
+        dayHours.map((item) => item.marine?.seaSurfaceTemperatureC),
+      ),
+      currentVelocityKmh: maximum(
+        dayHours.map((item) => item.marine?.currentVelocityKmh),
+      ),
+      currentDirectionDegrees: null,
+      seaLevelHeightMeters: null,
+    };
+    const ranked = dayHours
+      .map((item) => ({
+        time: item.time,
+        level: fishingCondition(item.weather, item.marine, thresholds).level,
+      }))
+      .filter((item) => item.level === "IDEAL" || item.level === "FAVORABLE")
+      .sort((a, b) => {
+        const rank = { IDEAL: 0, FAVORABLE: 1 } as const;
+        return (
+          rank[a.level as keyof typeof rank] -
+          rank[b.level as keyof typeof rank]
+        );
+      })
+      .slice(0, 4)
+      .map((item) => item.time);
+    return {
+      date: day.date,
+      condition: fishingCondition(weather, marine, thresholds),
+      bestHours: ranked,
+      waveHeightMaxMeters: marine.waveHeightMeters,
+      waveHeightAverageMeters: average(
+        dayHours.map((item) => item.marine?.waveHeightMeters),
+      ),
+      wavePeriodMinSeconds: marine.wavePeriodSeconds,
+      swellHeightMaxMeters: marine.swellHeightMeters,
+      seaSurfaceTemperatureAverageC: marine.seaSurfaceTemperatureC,
+      currentVelocityMaxKmh: marine.currentVelocityKmh,
+    };
+  });
 }

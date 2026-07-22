@@ -45,6 +45,24 @@ export type DailyForecast = {
   windDirectionDominantDegrees: number | null;
 };
 
+export type FishingConditionIndicator = {
+  level: "IDEAL" | "FAVORABLE" | "CAUTION" | "DIFFICULT" | "INSUFFICIENT";
+  label: string;
+  reasons: string[];
+};
+
+export type DailyFishingOutlook = {
+  date: string;
+  condition: FishingConditionIndicator;
+  bestHours: string[];
+  waveHeightMaxMeters: number | null;
+  waveHeightAverageMeters: number | null;
+  wavePeriodMinSeconds: number | null;
+  swellHeightMaxMeters: number | null;
+  seaSurfaceTemperatureAverageC: number | null;
+  currentVelocityMaxKmh: number | null;
+};
+
 export type PortForecast = {
   location: { id: string; name: string; timezone: string };
   currentWeather: WeatherCondition | null;
@@ -55,16 +73,13 @@ export type PortForecast = {
     marine: MarineCondition | null;
   }>;
   daily: DailyForecast[];
+  dailyFishingOutlooks: DailyFishingOutlook[];
   fetchedAt: string;
   cachedUntil: string;
   provider: "open-meteo";
   isStale: boolean;
   partialError: "weather" | "marine" | null;
-  condition: {
-    level: "FAVORABLE" | "CAUTION" | "DIFFICULT" | "INSUFFICIENT";
-    label: string;
-    reasons: string[];
-  };
+  condition: FishingConditionIndicator;
 };
 
 export type WeatherLocation = {
