@@ -34,7 +34,8 @@ Las estadísticas y logros se calculan desde registros autorizados para evitar c
 
 ## Rutas
 
-- Públicas: `/`, `/privacidad`, `/terminos`, `/signin-with-chatgpt` (administrada por la plataforma).
+- Públicas: `/`, `/iniciar-sesion`, `/registro`, `/verificar-correo`, `/olvide-mi-contrasena`, `/restablecer-contrasena`, `/cerrar-sesion`, `/privacidad` y `/terminos`.
+- Proveedor: `/signin-with-chatgpt` y `/signout-with-chatgpt` son administradas por Sites únicamente en producción; las pantallas públicas usan la cuenta demo cuando detectan localhost.
 - Aplicación: `/app` y cualquier subruta bajo `/app/*`.
 - APIs: `/api/yucafish`, `/api/media`, `/api/health`.
 - Administración: integrada en `/app` y disponible solo cuando el perfil servidor tiene rol `ADMIN`.

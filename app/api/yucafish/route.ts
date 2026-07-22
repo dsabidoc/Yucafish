@@ -107,6 +107,7 @@ export async function POST(request: NextRequest) {
       const fishingDate = text(payload, "fishingDate", true)!;
       await db.prepare("INSERT INTO fishing_trips (id, owner_email, title, port, fishing_date, departure_time, return_time, area, vessel, captain, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, email, title, port, fishingDate, text(payload, "departureTime"), text(payload, "returnTime"), text(payload, "area"), text(payload, "vessel"), text(payload, "captain"), text(payload, "notes"), payload.status === "COMPLETED" ? "COMPLETED" : "DRAFT", timestamp, timestamp).run();
       await audit(email, "TRIP_CREATED", "FishingTrip", id);
+      return NextResponse.json({ ok: true, id, data: await bootstrap(email, request) });
     } else if (op === "updateTrip") {
       const id = text(payload, "id", true)!;
       if (!await ownedTrip(email, id)) return jsonError("No tienes permiso para modificar este registro.", 403);

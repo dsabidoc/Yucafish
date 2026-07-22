@@ -19,6 +19,23 @@ test("includes legal routes", async () => {
   assert.match(terms, /Términos de uso/);
 });
 
+test("routes landing access actions through real public pages", async () => {
+  const landing = await readFile(new URL("app/page.tsx", root), "utf8");
+  assert.match(landing, /href="\/iniciar-sesion"/);
+  assert.match(landing, /href="\/registro"/);
+  assert.doesNotMatch(landing, /href="\/signin-with-chatgpt/);
+  const routes = ["iniciar-sesion", "registro", "verificar-correo", "olvide-mi-contrasena", "restablecer-contrasena", "cerrar-sesion"];
+  await Promise.all(routes.map((route) => readFile(new URL(`app/${route}/page.tsx`, root), "utf8")));
+});
+
+test("keeps every application control attached to an action", async () => {
+  const source = await readFile(new URL("app/components/YucaFishApp.tsx", root), "utf8");
+  assert.doesNotMatch(source, /<button className="icon-button"><\/button>/);
+  assert.match(source, /onClick=\{notify\}/);
+  assert.match(source, /deletePhoto/);
+  assert.match(source, /data-add-fish="true"/);
+});
+
 test("includes required PWA assets", async () => {
   const { access } = await import("node:fs/promises");
   await Promise.all([access(new URL("public/manifest.webmanifest", root)), access(new URL("public/favicon.svg", root)), access(new URL("public/og.png", root))]);

@@ -24,12 +24,15 @@ npm run dev
 
 La vista local usa únicamente la identidad de demostración `capitan@yucafish.local`, creada automáticamente con rol administrador y registros de muestra. Esta identidad no se habilita fuera de `localhost`.
 
+Los botones **Iniciar sesión** y **Crear cuenta** abren pantallas propias de YucaFish. En local continúan a la cuenta demo; en Sites delegan registro, verificación, recuperación y sesión al proveedor seguro de la plataforma.
+
 ## Validación
 
 ```bash
 npm run lint
 npx tsc --noEmit
 npm test
+npm run test:integration # con el servidor local activo
 ```
 
 `npm test` ejecuta el build de producción, pruebas unitarias de dominio y verificaciones de renderizado. La migración se regenera con `npm run db:generate`.
