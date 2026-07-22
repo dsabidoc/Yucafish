@@ -34,6 +34,18 @@ test("keeps every application control attached to an action", async () => {
   assert.match(source, /onClick=\{notify\}/);
   assert.match(source, /deletePhoto/);
   assert.match(source, /data-add-fish="true"/);
+  assert.match(source, /Clima y mar/);
+  assert.match(source, /Guardar las condiciones de esta salida/);
+  assert.match(source, /Open-Meteo/);
+});
+
+test("keeps Open-Meteo requests on protected backend routes", async () => {
+  const source = await readFile(new URL("app/components/YucaFishApp.tsx", root), "utf8");
+  assert.doesNotMatch(source, /api\.open-meteo\.com|marine-api\.open-meteo\.com/);
+  const client = await readFile(new URL("lib/weather/client.ts", root), "utf8");
+  assert.match(client, /buildWeatherUrl/);
+  assert.match(client, /AbortController/);
+  assert.match(client, /cell_selection/);
 });
 
 test("includes required PWA assets", async () => {

@@ -8,11 +8,37 @@ const post = async (body, headers = {}) => {
 
 const health = await fetch(`${base}/api/health`);
 assert.equal(health.status, 200);
+const locationsResponse = await fetch(`${base}/api/weather/locations`);
+assert.equal(locationsResponse.status, 200);
+const locationsBody = await locationsResponse.json();
+assert.equal(locationsBody.locations.length, 12);
+const sisal = locationsBody.locations.find((location) => location.name === "Sisal");
+assert.ok(sisal?.id);
+const forecastResponse = await fetch(`${base}/api/weather/locations/${sisal.id}?latitude=0&longitude=0`);
+assert.equal(forecastResponse.status, 200);
+const forecast = await forecastResponse.json();
+assert.equal(forecast.location.id, sisal.id);
+assert.equal(forecast.location.timezone, "America/Merida");
+assert.equal(forecast.provider, "open-meteo");
+assert.equal(forecast.daily.length, 7);
+assert.ok(forecast.hourly.length >= 24);
+const cachedResponse = await fetch(`${base}/api/weather/locations/${sisal.id}`);
+const cachedForecast = await cachedResponse.json();
+assert.equal(cachedForecast.fetchedAt, forecast.fetchedAt);
+const missingLocation = await fetch(`${base}/api/weather/locations/00000000-0000-4000-8000-000000000000`);
+assert.equal(missingLocation.status, 404);
 const title = `Integración ${Date.now()}`;
-const created = await post({ op: "createTrip", title, port: "Sisal", fishingDate: "2026-07-22", status: "DRAFT" });
+const created = await post({ op: "createTrip", title, port: "Sisal", departureLocationId: sisal.id, fishingDate: new Intl.DateTimeFormat("en-CA", { timeZone: "America/Merida" }).format(new Date()), status: "DRAFT" });
 assert.equal(created.response.status, 200);
 assert.ok(created.body.id);
 const tripId = created.body.id;
+const snapshotResponse = await fetch(`${base}/api/fishing-trips/${tripId}/weather-snapshot`, { method: "POST" });
+assert.equal(snapshotResponse.status, 200);
+const snapshotBody = await snapshotResponse.json();
+assert.equal(snapshotBody.snapshot.fishingTripId, tripId);
+assert.equal(snapshotBody.snapshot.provider, "open-meteo");
+const foreignSnapshot = await fetch(`${base}/api/fishing-trips/${tripId}/weather-snapshot`, { method: "POST", headers: { "oai-authenticated-user-email": "otro@yucafish.test" } });
+assert.equal(foreignSnapshot.status, 403);
 
 const caught = await post({ op: "createCatch", tripId, species: "Mero", weight: 4.25, weightUnit: "kg", releaseStatus: "RELEASED" });
 assert.equal(caught.response.status, 200);

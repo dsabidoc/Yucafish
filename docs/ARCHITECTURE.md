@@ -26,6 +26,8 @@ erDiagram
   FISHING_TRIP ||--o{ MEDIA_ASSET : has
   CATCH ||--o{ MEDIA_ASSET : has
   PROFILE ||--o{ AUDIT_LOG : performs
+  FISHING_TRIP ||--o| WEATHER_SNAPSHOT : preserves
+  PORT ||--o{ WEATHER_CACHE : keys
   SPECIES { string common_name string aliases boolean active }
   PORT { string name string type boolean active }
 ```
@@ -38,6 +40,7 @@ Las estadísticas y logros se calculan desde registros autorizados para evitar c
 - Proveedor: `/signin-with-chatgpt` y `/signout-with-chatgpt` son administradas por Sites únicamente en producción; las pantallas públicas usan la cuenta demo cuando detectan localhost.
 - Aplicación: `/app` y cualquier subruta bajo `/app/*`.
 - APIs: `/api/yucafish`, `/api/media`, `/api/health`.
+- Clima: `/api/weather/locations`, `/api/weather/locations/:id`, sus vistas `hourly` y `daily`, y `/api/fishing-trips/:id/weather-snapshot`.
 - Administración: integrada en `/app` y disponible solo cuando el perfil servidor tiene rol `ADMIN`.
 
 ## Seguridad
@@ -48,6 +51,7 @@ Las estadísticas y logros se calculan desde registros autorizados para evitar c
 - CSP, HSTS, protección de framing, `nosniff`, política de permisos y referrer policy.
 - Auditoría con hash parcial irreversible del actor; nunca contraseñas, tokens o binarios.
 - SQL preparado y validación duplicada en servidor. Errores seguros sin stack trace al usuario.
+- Open-Meteo se consulta únicamente desde el servidor, con hosts permitidos, timeout, límite de respuesta, Zod, un reintento controlado, rate limiting persistente y caché D1 con tolerancia a datos obsoletos.
 
 ## Correo y autenticación
 
@@ -66,7 +70,7 @@ Los cambios de esquema se hacen en `db/schema.ts`, después `npm run db:generate
 - El prompt prefería PostgreSQL/Supabase o Auth.js; Sites proporciona D1, R2 e identidad administrada, que cubren persistencia, archivos y autenticación sin almacenar contraseñas.
 - La sincronización offline compleja se deja fuera para no arriesgar integridad. La PWA es instalable y muestra la última interfaz cargada, pero no encola escrituras.
 - Compartir y descargar aparecen como arquitectura futura, no como botones inertes.
-- Las ubicaciones son texto aproximado; no se captura GPS exacto.
+- Las pescas conservan texto aproximado y una referencia al catálogo de puertos; no se captura GPS del usuario. Las coordenadas meteorológicas pertenecen al catálogo administrado y nunca se aceptan desde el cliente.
 
 ## Operación y despliegue
 
