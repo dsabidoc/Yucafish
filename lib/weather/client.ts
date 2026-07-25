@@ -1,10 +1,16 @@
 import { weatherConfig, assertProviderUrl } from "./config";
 import {
+  TideCheckUnavailableError,
   WeatherProviderError,
   WeatherTimeoutError,
   WeatherValidationError,
 } from "./errors";
-import { marineResponseSchema, weatherResponseSchema } from "./schemas";
+import {
+  marineResponseSchema,
+  tideCheckResponseSchema,
+  tideStationsSchema,
+  weatherResponseSchema,
+} from "./schemas";
 
 const weatherCurrent = [
   "temperature_2m",
@@ -117,7 +123,7 @@ async function requestJson(url: URL, correlationId: string) {
     try {
       const response = await fetch(url, {
         signal: controller.signal,
-        headers: { accept: "application/json", "user-agent": "YucaFish/1.0" },
+        headers: { accept: "application/json", "user-agent": "GoFishing.mx/1.0" },
       });
       if (!response.ok) {
         if (response.status < 500 || attempt === weatherConfig.retryCount)
@@ -171,6 +177,67 @@ async function requestJson(url: URL, correlationId: string) {
   throw new WeatherProviderError("No fue posible conectar con Open-Meteo");
 }
 
+async function requestTideCheckJson(url: URL, correlationId: string) {
+  if (!weatherConfig.tideCheckApiKey)
+    throw new TideCheckUnavailableError(
+      "TideCheck no está configurado en este entorno.",
+    );
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    weatherConfig.tideCheckRequestTimeoutMs,
+  );
+  const started = Date.now();
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        "user-agent": "GoFishing.mx/1.0",
+        "x-api-key": weatherConfig.tideCheckApiKey,
+      },
+    });
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403)
+        throw new TideCheckUnavailableError(
+          `TideCheck respondió con estado ${response.status}.`,
+        );
+      throw new WeatherProviderError(
+        `TideCheck respondió con estado ${response.status}`,
+      );
+    }
+    const body = await response.text();
+    if (body.length > weatherConfig.maximumResponseBytes)
+      throw new WeatherValidationError(
+        "Respuesta de TideCheck demasiado grande",
+      );
+    console.info(
+      JSON.stringify({
+        event: "weather_provider_request",
+        provider: "tidecheck",
+        durationMs: Date.now() - started,
+        resultStatus: "success",
+        correlationId,
+      }),
+    );
+    return JSON.parse(body) as unknown;
+  } catch (error) {
+    if (
+      error instanceof TideCheckUnavailableError ||
+      error instanceof WeatherProviderError ||
+      error instanceof WeatherValidationError
+    )
+      throw error;
+    if (controller.signal.aborted)
+      throw new WeatherTimeoutError(
+        "La consulta de TideCheck excedió el tiempo permitido",
+      );
+    throw new WeatherProviderError("No fue posible conectar con TideCheck");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchWeather(input: Coordinates, correlationId: string) {
   const parsed = weatherResponseSchema.safeParse(
     await requestJson(buildWeatherUrl(input), correlationId),
@@ -189,6 +256,64 @@ export async function fetchMarine(input: Coordinates, correlationId: string) {
   if (!parsed.success)
     throw new WeatherValidationError(
       "La respuesta marina no tiene el formato esperado",
+    );
+  return parsed.data;
+}
+
+function buildTideCheckUrl(pathname: string, search?: URLSearchParams) {
+  const url = new URL(pathname, weatherConfig.tideCheckBaseUrl);
+  if (search) url.search = search.toString();
+  return url;
+}
+
+export async function fetchNearestTideStations(
+  input: { latitude: number; longitude: number },
+  correlationId: string,
+) {
+  const parsed = tideStationsSchema.safeParse(
+    await requestTideCheckJson(
+      buildTideCheckUrl(
+        "/api/stations/nearest",
+        new URLSearchParams({
+          lat: String(input.latitude),
+          lng: String(input.longitude),
+        }),
+      ),
+      correlationId,
+    ),
+  );
+  if (!parsed.success)
+    throw new WeatherValidationError(
+      "La búsqueda de estaciones de TideCheck no tiene el formato esperado",
+    );
+  return parsed.data;
+}
+
+export async function fetchTideCheckForecast(
+  input: {
+    stationId: string;
+    start: string;
+    days: number;
+    datum?: "LAT" | "MLLW" | "MSL";
+  },
+  correlationId: string,
+) {
+  const parsed = tideCheckResponseSchema.safeParse(
+    await requestTideCheckJson(
+      buildTideCheckUrl(
+        `/api/station/${encodeURIComponent(input.stationId)}/tides`,
+        new URLSearchParams({
+          start: input.start,
+          days: String(input.days),
+          datum: input.datum ?? "LAT",
+        }),
+      ),
+      correlationId,
+    ),
+  );
+  if (!parsed.success)
+    throw new WeatherValidationError(
+      "La respuesta de TideCheck no tiene el formato esperado",
     );
   return parsed.data;
 }

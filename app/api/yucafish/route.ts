@@ -1,6 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { database, ensureDatabase, mapRow, now, slugify } from "@/db/runtime";
+import {
+  database,
+  ensureDatabase,
+  ensureUniquePublicSlug,
+  mapRow,
+  now,
+  slugify,
+} from "@/db/runtime";
 import { requestIdentity } from "@/lib/server/auth";
+import { weatherConfig } from "@/lib/weather/config";
+import {
+  sendEmailChangeVerificationEmail,
+  sendModerationEmail,
+} from "@/lib/server/mail";
+import { issueAccountToken } from "@/lib/server/account-tokens";
+import {
+  findNearbyTideStations,
+} from "@/lib/weather/service";
+import { assertInsideYucatan } from "@/lib/weather/geofence";
 
 export const dynamic = "force-dynamic";
 
@@ -48,15 +65,24 @@ async function ensureProfile(email: string, displayName?: string | null) {
   const timestamp = now();
   const name =
     displayName ||
-    (email.endsWith("@yucafish.local") ? "David Sabido" : email.split("@")[0]);
-  const role = email.endsWith("@yucafish.local") ? "ADMIN" : "USER";
+    (email.endsWith("@gofishing.local") ? "David Sabido" : email.split("@")[0]);
+  const role = email.endsWith("@gofishing.local") ? "ADMIN" : "USER";
+  const publicSlug = await ensureUniquePublicSlug(name, email);
   await db
     .prepare(
-      "INSERT INTO profiles (email, display_name, first_name, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO profiles (email, display_name, first_name, role, public_slug, public_profile_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
     )
-    .bind(email, name, name.split(" ")[0], role, timestamp, timestamp)
+    .bind(
+      email,
+      name,
+      name.split(" ")[0],
+      role,
+      publicSlug,
+      timestamp,
+      timestamp,
+    )
     .run();
-  if (email.endsWith("@yucafish.local")) {
+  if (email.endsWith("@gofishing.local")) {
     const daysAgo = (days: number) => {
       const d = new Date();
       d.setDate(d.getDate() - days);
@@ -256,6 +282,46 @@ async function bootstrap(email: string, request: NextRequest) {
             )?.value ?? null,
         }
       : null;
+  const adminUsers =
+    String(profile.role) === "ADMIN"
+      ? ((
+          await db
+            .prepare(
+              "SELECT email, display_name, first_name, last_name, city, state, country, timezone, weight_unit, role, status, public_slug, public_profile_enabled, avatar_url, created_at, updated_at FROM profiles ORDER BY created_at DESC",
+            )
+            .all<Record<string, unknown>>()
+        ).results ?? [])
+      : [];
+  const adminTrips =
+    String(profile.role) === "ADMIN"
+      ? ((
+          await db
+            .prepare(
+              "SELECT * FROM fishing_trips WHERE deleted_at IS NULL ORDER BY fishing_date DESC, created_at DESC",
+            )
+            .all<Record<string, unknown>>()
+        ).results ?? [])
+      : [];
+  const adminCatches =
+    String(profile.role) === "ADMIN"
+      ? ((
+          await db
+            .prepare(
+              "SELECT * FROM catches WHERE deleted_at IS NULL ORDER BY created_at DESC",
+            )
+            .all<Record<string, unknown>>()
+        ).results ?? [])
+      : [];
+  const adminMedia =
+    String(profile.role) === "ADMIN"
+      ? ((
+          await db
+            .prepare(
+              "SELECT id, owner_email, trip_id, catch_id, alt_text, mime_type, deleted_at, created_at FROM media_assets WHERE deleted_at IS NULL ORDER BY created_at DESC",
+            )
+            .all<Record<string, unknown>>()
+        ).results ?? [])
+      : [];
   return {
     profile,
     trips: trips.map(mapRow),
@@ -269,6 +335,10 @@ async function bootstrap(email: string, request: NextRequest) {
     weatherSettings: weatherSettings ? mapRow(weatherSettings) : null,
     weatherDiagnostics,
     logs: logs.map(mapRow),
+    adminUsers: adminUsers.map(mapRow),
+    adminTrips: adminTrips.map(mapRow),
+    adminCatches: adminCatches.map(mapRow),
+    adminMedia: adminMedia.map(mapRow).map((m) => ({ ...m, url: `/api/media?id=${m.id}` })),
   };
 }
 
@@ -301,6 +371,18 @@ function positiveNumber(payload: Payload, key: string) {
   if (!Number.isFinite(value) || value <= 0 || value > 1000)
     throw new Error("Ingresa un peso válido mayor que cero.");
   return value;
+}
+
+function booleanValue(payload: Payload, key: string, fallback = false) {
+  const value = payload[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "si", "sí", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
 }
 
 async function ownedTrip(email: string, id: string) {
@@ -339,7 +421,7 @@ export async function POST(request: NextRequest) {
       const fishingDate = text(payload, "fishingDate", true)!;
       await db
         .prepare(
-          "INSERT INTO fishing_trips (id, owner_email, title, port, departure_location_id, fishing_date, departure_time, return_time, area, vessel, captain, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO fishing_trips (id, owner_email, title, port, departure_location_id, fishing_date, departure_time, return_time, area, vessel, captain, notes, status, cover_image_url, public_share, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(
           id,
@@ -355,6 +437,8 @@ export async function POST(request: NextRequest) {
           text(payload, "captain"),
           text(payload, "notes"),
           payload.status === "COMPLETED" ? "COMPLETED" : "DRAFT",
+          text(payload, "coverImageUrl"),
+          booleanValue(payload, "publicShare", false) ? 1 : 0,
           timestamp,
           timestamp,
         )
@@ -383,7 +467,7 @@ export async function POST(request: NextRequest) {
         return jsonError("Selecciona un puerto válido.", 422);
       await db
         .prepare(
-          "UPDATE fishing_trips SET title=?, port=?, departure_location_id=?, fishing_date=?, departure_time=?, return_time=?, area=?, vessel=?, captain=?, notes=?, status=?, updated_at=? WHERE id=? AND owner_email=?",
+          "UPDATE fishing_trips SET title=?, port=?, departure_location_id=?, fishing_date=?, departure_time=?, return_time=?, area=?, vessel=?, captain=?, notes=?, status=?, cover_image_url=?, public_share=?, updated_at=? WHERE id=? AND owner_email=?",
         )
         .bind(
           text(payload, "title", true),
@@ -397,12 +481,42 @@ export async function POST(request: NextRequest) {
           text(payload, "captain"),
           text(payload, "notes"),
           payload.status === "COMPLETED" ? "COMPLETED" : "DRAFT",
+          text(payload, "coverImageUrl"),
+          booleanValue(payload, "publicShare", false) ? 1 : 0,
           timestamp,
           id,
           email,
         )
         .run();
       await audit(email, "TRIP_UPDATED", "FishingTrip", id);
+    } else if (op === "setTripCover") {
+      const id = text(payload, "id", true)!;
+      if (!(await ownedTrip(email, id)))
+        return jsonError(
+          "No tienes permiso para modificar este registro.",
+          403,
+        );
+      await db
+        .prepare(
+          "UPDATE fishing_trips SET cover_image_url=?, updated_at=? WHERE id=? AND owner_email=?",
+        )
+        .bind(text(payload, "coverImageUrl"), timestamp, id, email)
+        .run();
+      await audit(email, "TRIP_COVER_UPDATED", "FishingTrip", id);
+    } else if (op === "toggleTripPublicShare") {
+      const id = text(payload, "id", true)!;
+      if (!(await ownedTrip(email, id)))
+        return jsonError(
+          "No tienes permiso para modificar este registro.",
+          403,
+        );
+      await db
+        .prepare(
+          "UPDATE fishing_trips SET public_share = CASE public_share WHEN 1 THEN 0 ELSE 1 END, updated_at=? WHERE id=? AND owner_email=?",
+        )
+        .bind(timestamp, id, email)
+        .run();
+      await audit(email, "TRIP_PUBLIC_SHARE_UPDATED", "FishingTrip", id);
     } else if (op === "deleteTrip") {
       const id = text(payload, "id", true)!;
       if (!(await ownedTrip(email, id)))
@@ -436,7 +550,7 @@ export async function POST(request: NextRequest) {
       const id = crypto.randomUUID();
       await db
         .prepare(
-          "INSERT INTO fishing_trips (id, owner_email, title, port, departure_location_id, fishing_date, departure_time, return_time, area, vessel, captain, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)",
+          "INSERT INTO fishing_trips (id, owner_email, title, port, departure_location_id, fishing_date, departure_time, return_time, area, vessel, captain, notes, status, cover_image_url, public_share, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, 0, ?, ?)",
         )
         .bind(
           id,
@@ -451,6 +565,7 @@ export async function POST(request: NextRequest) {
           source.vessel,
           source.captain,
           source.notes,
+          source.cover_image_url ?? null,
           timestamp,
           timestamp,
         )
@@ -554,12 +669,21 @@ export async function POST(request: NextRequest) {
         .run();
       await audit(email, "CATCH_DELETED", "Catch", id);
     } else if (op === "updateProfile") {
+      const displayName = text(payload, "displayName", true)!;
+      const uniqueSlug = await ensureUniquePublicSlug(
+        String(text(payload, "publicSlug") || "") ||
+          String(profile.publicSlug || "") ||
+          displayName ||
+          String(profile.firstName || "") ||
+          email.split("@")[0],
+        email,
+      );
       await db
         .prepare(
-          "UPDATE profiles SET display_name=?, first_name=?, last_name=?, city=?, state=?, country=?, timezone=?, weight_unit=?, updated_at=? WHERE email=?",
+          "UPDATE profiles SET display_name=?, first_name=?, last_name=?, city=?, state=?, country=?, timezone=?, weight_unit=?, public_slug=?, public_profile_enabled=?, avatar_url=?, updated_at=? WHERE email=?",
         )
         .bind(
-          text(payload, "displayName", true),
+          displayName,
           text(payload, "firstName") ?? "",
           text(payload, "lastName") ?? "",
           text(payload, "city") ?? "",
@@ -567,11 +691,103 @@ export async function POST(request: NextRequest) {
           text(payload, "country") ?? "México",
           text(payload, "timezone") ?? "America/Merida",
           payload.weightUnit === "lb" ? "lb" : "kg",
+          uniqueSlug,
+          booleanValue(payload, "publicProfileEnabled", true) ? 1 : 0,
+          text(payload, "avatarUrl"),
           timestamp,
           email,
         )
         .run();
       await audit(email, "PROFILE_UPDATED", "UserProfile");
+      const nextEmail = String(text(payload, "newEmail") || "")
+        .trim()
+        .toLowerCase();
+      if (nextEmail && nextEmail !== email) {
+        const collision = await db
+          .prepare("SELECT email FROM profiles WHERE email=? LIMIT 1")
+          .bind(nextEmail)
+          .first<{ email: string }>();
+        if (collision)
+          return jsonError("Ese correo ya está siendo usado por otra cuenta.", 409);
+        const token = await issueAccountToken({
+          email,
+          type: "EMAIL_CHANGE",
+          pendingEmail: nextEmail,
+          expiresInHours: 24,
+        });
+        const baseUrl =
+          process.env.GOFISHING_APP_URL ||
+          process.env.NEXT_PUBLIC_APP_URL ||
+          "https://www.gofishing.mx";
+        void sendEmailChangeVerificationEmail({
+          currentEmail: email,
+          newEmail: nextEmail,
+          verifyUrl: `${baseUrl}/verificar-correo?token=${encodeURIComponent(token)}`,
+        }).catch((error) => console.error("email-change-email-error", error));
+      }
+    } else if (op === "adminSetUserStatus") {
+      if (profile.role !== "ADMIN")
+        return jsonError("Se requiere acceso de administrador.", 403);
+      const targetEmail = text(payload, "email", true)!;
+      const status = text(payload, "status", true)! === "ACTIVE" ? "ACTIVE" : "DISABLED";
+      const reason = text(payload, "reason") || "Se aplicó una moderación en tu cuenta.";
+      await db
+        .prepare("UPDATE profiles SET status=?, updated_at=? WHERE email=?")
+        .bind(status, timestamp, targetEmail)
+        .run();
+      void sendModerationEmail({
+        email: targetEmail,
+        title:
+          status === "DISABLED"
+            ? "Tu cuenta fue deshabilitada temporalmente"
+            : "Tu cuenta fue reactivada",
+        reason,
+        actionLabel: status === "DISABLED" ? "Cuenta deshabilitada" : "Cuenta reactivada",
+      }).catch((error) => console.error("moderation-email-error", error));
+      await audit(email, "USER_STATUS_UPDATED", "UserProfile", targetEmail);
+    } else if (op === "adminDeleteTrip") {
+      if (profile.role !== "ADMIN")
+        return jsonError("Se requiere acceso de administrador.", 403);
+      const id = text(payload, "id", true)!;
+      const reason = text(payload, "reason") || "Tu pesca fue retirada por moderación.";
+      const tripOwner = await db
+        .prepare("SELECT owner_email FROM fishing_trips WHERE id=? LIMIT 1")
+        .bind(id)
+        .first<{ owner_email: string }>();
+      await db.batch([
+        db
+          .prepare("UPDATE fishing_trips SET deleted_at=?, updated_at=? WHERE id=?")
+          .bind(timestamp, timestamp, id),
+        db
+          .prepare("UPDATE catches SET deleted_at=?, updated_at=? WHERE trip_id=?")
+          .bind(timestamp, timestamp, id),
+      ]);
+      if (tripOwner?.owner_email)
+        void sendModerationEmail({
+          email: tripOwner.owner_email,
+          title: "Una pesca de tu cuenta fue retirada",
+          reason,
+          actionLabel: "Pesca eliminada",
+        }).catch((error) => console.error("moderation-email-error", error));
+      await audit(email, "ADMIN_TRIP_DELETED", "FishingTrip", id);
+    } else if (op === "adminDeleteCatch") {
+      if (profile.role !== "ADMIN")
+        return jsonError("Se requiere acceso de administrador.", 403);
+      const id = text(payload, "id", true)!;
+      await db
+        .prepare("UPDATE catches SET deleted_at=?, updated_at=? WHERE id=?")
+        .bind(timestamp, timestamp, id)
+        .run();
+      await audit(email, "ADMIN_CATCH_DELETED", "Catch", id);
+    } else if (op === "adminDeleteMedia") {
+      if (profile.role !== "ADMIN")
+        return jsonError("Se requiere acceso de administrador.", 403);
+      const id = text(payload, "id", true)!;
+      await db
+        .prepare("UPDATE media_assets SET deleted_at=? WHERE id=?")
+        .bind(timestamp, id)
+        .run();
+      await audit(email, "ADMIN_MEDIA_DELETED", "MediaAsset", id);
     } else if (op === "createSpecies" || op === "createPort") {
       if (profile.role !== "ADMIN")
         return jsonError("Se requiere acceso de administrador.", 403);
@@ -640,11 +856,21 @@ export async function POST(request: NextRequest) {
           throw new Error(`El campo ${key} no es válido.`);
         return parsed;
       };
-      const latitude = number("latitude", -90, 90);
-      const longitude = number("longitude", -180, 180);
+      const latitude = number("latitude", -90, 90) as number;
+      const longitude = number("longitude", -180, 180) as number;
       const marineLatitude = number("marineLatitude", -90, 90, true);
       const marineLongitude = number("marineLongitude", -180, 180, true);
       const timezone = text(payload, "timezone", true)!;
+      if (weatherConfig.yucatanGeofenceEnabled) {
+        assertInsideYucatan(latitude, longitude, {
+          label: "La coordenada terrestre",
+        });
+        if (marineLatitude !== null && marineLongitude !== null)
+          assertInsideYucatan(marineLatitude, marineLongitude, {
+            label: "La coordenada marina",
+            allowMarineMarginKm: weatherConfig.yucatanMarineMarginKm,
+          });
+      }
       try {
         new Intl.DateTimeFormat("es-MX", { timeZone: timezone }).format();
       } catch {
@@ -652,7 +878,7 @@ export async function POST(request: NextRequest) {
       }
       await db
         .prepare(
-          "UPDATE ports SET latitude=?, longitude=?, marine_latitude=?, marine_longitude=?, timezone=?, is_weather_enabled=?, updated_at=? WHERE id=?",
+          "UPDATE ports SET state='Yucatán', state_code='YUC', country='México', country_code='MX', latitude=?, longitude=?, marine_latitude=?, marine_longitude=?, timezone=?, is_weather_enabled=?, updated_at=? WHERE id=?",
         )
         .bind(
           latitude,
@@ -670,6 +896,59 @@ export async function POST(request: NextRequest) {
         .bind(id)
         .run();
       await audit(email, "PORT_WEATHER_UPDATED", "DepartureLocation", id);
+    } else if (op === "assignTideStation") {
+      if (profile.role !== "ADMIN")
+        return jsonError("Se requiere acceso de administrador.", 403);
+      const id = text(payload, "id", true)!;
+      const stationId = text(payload, "stationId", true)!;
+      const nearby = await findNearbyTideStations(id);
+      const selected = nearby.find((station) => station.id === stationId);
+      if (!selected)
+        return jsonError(
+          "La estación no está disponible para este puerto de Yucatán.",
+          422,
+        );
+      await db
+        .prepare(
+          "UPDATE ports SET tide_check_enabled=1, tide_check_station_id=?, tide_check_station_name=?, tide_check_station_latitude=?, tide_check_station_longitude=?, tide_check_station_state=?, tide_check_station_country=?, station_verified_at=?, station_verified_by=?, updated_at=? WHERE id=?",
+        )
+        .bind(
+          selected.id,
+          selected.name,
+          selected.latitude,
+          selected.longitude,
+          selected.region,
+          selected.country,
+          timestamp,
+          email,
+          timestamp,
+          id,
+        )
+        .run();
+      await db
+        .prepare(
+          "DELETE FROM weather_cache WHERE location_id=? AND provider='tidecheck'",
+        )
+        .bind(id)
+        .run();
+      await audit(email, "TIDECHECK_STATION_ASSIGNED", "DepartureLocation", id);
+    } else if (op === "clearTideStation") {
+      if (profile.role !== "ADMIN")
+        return jsonError("Se requiere acceso de administrador.", 403);
+      const id = text(payload, "id", true)!;
+      await db
+        .prepare(
+          "UPDATE ports SET tide_check_enabled=0, tide_check_station_id=NULL, tide_check_station_name=NULL, tide_check_station_latitude=NULL, tide_check_station_longitude=NULL, tide_check_station_state=NULL, tide_check_station_country=NULL, station_verified_at=NULL, station_verified_by=NULL, updated_at=? WHERE id=?",
+        )
+        .bind(timestamp, id)
+        .run();
+      await db
+        .prepare(
+          "DELETE FROM weather_cache WHERE location_id=? AND provider='tidecheck'",
+        )
+        .bind(id)
+        .run();
+      await audit(email, "TIDECHECK_STATION_CLEARED", "DepartureLocation", id);
     } else if (op === "updateWeatherThresholds") {
       if (profile.role !== "ADMIN")
         return jsonError("Se requiere acceso de administrador.", 403);

@@ -98,3 +98,116 @@ export const marineResponseSchema = z.object({
 export const locationIdSchema = z.string().uuid();
 export type WeatherProviderResponse = z.infer<typeof weatherResponseSchema>;
 export type MarineProviderResponse = z.infer<typeof marineResponseSchema>;
+
+const nullableString = z.string().nullable();
+
+export const tideStationSchema = z.object({
+  id: z.string(),
+  slug: z.string().nullable().optional(),
+  name: z.string(),
+  region: z.string().nullable().optional(),
+  country: z.string().nullable().optional(),
+  lat: nullableNumber.optional(),
+  lng: nullableNumber.optional(),
+  label: z.string().nullable().optional(),
+  distanceKm: nullableNumber.optional(),
+});
+
+export const tideStationsSchema = z.array(tideStationSchema);
+
+export const tideCheckResponseSchema = z.object({
+  station: z.object({
+    id: z.string(),
+    slug: z.string().nullable().optional(),
+    name: z.string(),
+    region: z.string().nullable().optional(),
+    country: z.string().nullable().optional(),
+    lat: nullableNumber.optional(),
+    lng: nullableNumber.optional(),
+    type: z.string().nullable().optional(),
+    timezone: z.string().nullable().optional(),
+  }),
+  datum: z.enum(["LAT", "MLLW", "MSL"]).catch("LAT"),
+  extremes: z
+    .array(
+      z.object({
+        time: z.string(),
+        localTime: nullableString.optional(),
+        localDate: nullableString.optional(),
+        height: nullableNumber.optional(),
+        type: z.enum(["high", "low"]),
+      }),
+    )
+    .optional()
+    .default([]),
+  timeSeries: z
+    .array(
+      z.object({
+        time: z.string(),
+        height: nullableNumber.optional(),
+      }),
+    )
+    .optional()
+    .default([]),
+  conditions: z
+    .object({
+      sunrise: nullableString.optional(),
+      sunset: nullableString.optional(),
+      sunriseLocal: nullableString.optional(),
+      sunsetLocal: nullableString.optional(),
+      moonPhase: nullableString.optional(),
+      moonPhaseValue: nullableNumber.optional(),
+      moonIllumination: nullableNumber.optional(),
+      tidalStrength: nullableString.optional(),
+      tidalStrengthValue: nullableNumber.optional(),
+      springNeap: nullableString.optional(),
+      moonCalendar: z
+        .array(
+          z.object({
+            type: nullableString.optional(),
+            name: nullableString.optional(),
+            date: nullableString.optional(),
+            dateLocal: nullableString.optional(),
+          }),
+        )
+        .optional()
+        .default([]),
+    })
+    .optional(),
+  dailyConditions: z
+    .array(
+      z.object({
+        date: z.string(),
+        sunrise: nullableString.optional(),
+        sunset: nullableString.optional(),
+        sunriseLocal: nullableString.optional(),
+        sunsetLocal: nullableString.optional(),
+        moonPhase: nullableString.optional(),
+        moonPhaseValue: nullableNumber.optional(),
+        moonIllumination: nullableNumber.optional(),
+        solunarRating: nullableNumber.optional(),
+        solunarLabel: nullableString.optional(),
+        springNeap: nullableString.optional(),
+        solunarPeriods: z
+          .array(
+            z.object({
+              type: z.enum(["major", "minor"]),
+              start: nullableString.optional(),
+              end: nullableString.optional(),
+              peak: nullableString.optional(),
+              startLocal: nullableString.optional(),
+              endLocal: nullableString.optional(),
+              peakLocal: nullableString.optional(),
+              enhanced: z.boolean().optional().default(false),
+            }),
+          )
+          .optional()
+          .default([]),
+      }),
+    )
+    .optional()
+    .default([]),
+});
+
+export type TideStationResponse = z.infer<typeof tideStationSchema>;
+export type TideCheckProviderResponse = z.infer<typeof tideCheckResponseSchema>;

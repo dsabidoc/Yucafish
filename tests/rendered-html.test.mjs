@@ -4,9 +4,9 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 
-test("defines the complete YucaFish public landing page", async () => {
+test("defines the complete GoFishing.mx public landing page", async () => {
   const source = await readFile(new URL("app/page.tsx", root), "utf8");
-  assert.match(source, /YucaFish/);
+  assert.match(source, /GoFishing\.mx/);
   assert.match(source, /Tu historial de pesca/);
   assert.match(source, /Crear cuenta/);
   assert.match(source, /PESCA RESPONSABLE/);

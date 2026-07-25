@@ -94,7 +94,9 @@ export const ports = sqliteTable("ports", {
   type: text("type").notNull().default("PUERTO"),
   municipality: text("municipality"),
   state: text("state").notNull().default("Yucatán"),
+  stateCode: text("state_code").notNull().default("YUC"),
   country: text("country").notNull().default("México"),
+  countryCode: text("country_code").notNull().default("MX"),
   latitude: real("latitude"),
   longitude: real("longitude"),
   marineLatitude: real("marine_latitude"),
@@ -103,6 +105,17 @@ export const ports = sqliteTable("ports", {
   isWeatherEnabled: integer("is_weather_enabled", { mode: "boolean" })
     .notNull()
     .default(false),
+  tideCheckEnabled: integer("tide_check_enabled", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  tideCheckStationId: text("tide_check_station_id"),
+  tideCheckStationName: text("tide_check_station_name"),
+  tideCheckStationLatitude: real("tide_check_station_latitude"),
+  tideCheckStationLongitude: real("tide_check_station_longitude"),
+  tideCheckStationState: text("tide_check_station_state"),
+  tideCheckStationCountry: text("tide_check_station_country"),
+  stationVerifiedAt: text("station_verified_at"),
+  stationVerifiedBy: text("station_verified_by"),
   sortOrder: integer("sort_order").notNull().default(0),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(""),

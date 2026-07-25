@@ -15,7 +15,7 @@ assert.equal(health.status, 200);
 const locationsResponse = await fetch(`${base}/api/weather/locations`);
 assert.equal(locationsResponse.status, 200);
 const locationsBody = await locationsResponse.json();
-assert.equal(locationsBody.locations.length, 12);
+assert.equal(locationsBody.locations.length, 19);
 const sisal = locationsBody.locations.find(
   (location) => location.name === "Sisal",
 );
@@ -41,6 +41,10 @@ const dailyResponse = await fetch(
 assert.equal(dailyResponse.status, 200);
 const dailyBody = await dailyResponse.json();
 assert.equal(dailyBody.dailyFishingOutlooks.length, 7);
+const stationsResponse = await fetch(
+  `${base}/api/weather/locations/${sisal.id}/stations`,
+);
+assert.ok([200, 422].includes(stationsResponse.status));
 const cachedResponse = await fetch(`${base}/api/weather/locations/${sisal.id}`);
 const cachedForecast = await cachedResponse.json();
 assert.equal(cachedForecast.fetchedAt, forecast.fetchedAt);
@@ -122,4 +126,4 @@ const removedCatch = await post({ op: "deleteCatch", id: catchId });
 assert.equal(removedCatch.response.status, 200);
 const removedTrip = await post({ op: "deleteTrip", id: tripId });
 assert.equal(removedTrip.response.status, 200);
-console.log("YucaFish API integration flow passed");
+console.log("GoFishing.mx API integration flow passed");

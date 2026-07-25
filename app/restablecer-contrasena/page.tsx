@@ -1,2 +1,15 @@
+import { Suspense } from "react";
+import { unstable_noStore as noStore } from "next/cache";
 import AuthFlow from "@/app/components/AuthFlow";
-export default function ResetPage() { return <AuthFlow mode="reset" />; }
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+export default function ResetPage() {
+  noStore();
+  return (
+    <Suspense>
+      <AuthFlow mode="reset" />
+    </Suspense>
+  );
+}

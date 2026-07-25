@@ -9,8 +9,11 @@
   align-items: center;
   text-align: left;
   cursor: pointer;
-  background: linear-gradient(115deg, #075ac6, #1479f8 58%, #21a99f);
+  background: linear-gradient(115deg, #0a1630, #0E38B1 58%, #1a63d9);
   color: #fff;
+}
+.weather-teaser-loading {
+  min-height: 96px;
 }
 .weather-teaser-icon {
   width: 46px;
@@ -396,6 +399,43 @@
   margin: 0;
   font-size: 11px;
 }
+.tide-overview {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.tide-overview > div {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: #f8fbff;
+  display: grid;
+  gap: 4px;
+}
+.tide-overview small,
+.tide-card small,
+.admin-tide-current small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.tide-overview b,
+.tide-card b,
+.admin-tide-current b {
+  font-size: 13px;
+}
+.tide-overview span,
+.tide-card span,
+.admin-tide-current span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.tide-unavailable-inline {
+  grid-column: 1 / -1;
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
 .weather-attribution {
   text-align: right;
   color: var(--muted);
@@ -442,6 +482,39 @@
 .snapshot-card {
   padding: 18px;
   margin: 15px 0;
+}
+.snapshot-card .card-title {
+  align-items: flex-start;
+  gap: 14px;
+}
+.snapshot-card .card-title > div {
+  flex: 1;
+  min-width: 0;
+}
+.snapshot-card .card-title p {
+  line-height: 1.45;
+  word-break: break-word;
+}
+.snapshot-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.snapshot-title-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.snapshot-title-main h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.1;
+}
+.snapshot-title-main p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
 }
 .snapshot-card > div:not(.card-title) {
   display: grid;
@@ -500,6 +573,39 @@
 .admin-weather-grid > .form-card > label select {
   width: 100%;
 }
+.admin-tide-stations {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.admin-tide-current {
+  margin: 12px 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fbff;
+  display: grid;
+  gap: 2px;
+}
+.admin-tide-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.admin-tide-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 12px;
+  background: #fff;
+  text-align: left;
+  display: grid;
+  gap: 3px;
+  cursor: pointer;
+}
+.admin-tide-item:hover {
+  border-color: #c4dcfb;
+  background: #f8fbff;
+}
 .test-status {
   font-size: 10px;
   color: var(--muted);
@@ -525,6 +631,9 @@
   }
   .admin-weather-grid {
     grid-template-columns: 1fr;
+  }
+  .tide-overview {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 @media (max-width: 650px) {
@@ -583,6 +692,9 @@
   }
   .weather-current {
     padding: 15px;
+  }
+  .tide-overview {
+    grid-template-columns: 1fr;
   }
   .weather-skeleton {
     grid-template-columns: 1fr 1fr;
@@ -760,6 +872,41 @@
   font-size: 10px;
   color: var(--muted);
 }
+.tide-solunar-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+.tide-card {
+  padding: 18px;
+}
+.tide-event-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.tide-event-grid > div {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 3px;
+  background: #f8fbff;
+}
+.tide-event-grid.solunar {
+  grid-template-columns: 1fr;
+}
+.tide-event-grid em {
+  color: var(--muted);
+  font-size: 10px;
+}
+.tide-footnote {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
 .selected-day-hours {
   display: grid;
   grid-auto-flow: column;
@@ -768,6 +915,133 @@
   gap: 9px;
   padding-bottom: 8px;
   scroll-snap-type: x proximity;
+}
+.trip-forecast-card {
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.trip-forecast-empty p,
+.trip-forecast-note,
+.closures-note p,
+.closures-sources {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.trip-forecast-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+}
+.trip-forecast-top small {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--blue);
+  font-weight: 750;
+}
+.trip-forecast-top h2 {
+  margin: 4px 0;
+  font-size: 24px;
+}
+.trip-forecast-top p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.trip-forecast-metrics {
+  margin-top: 14px;
+}
+.trip-forecast-note {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f4f9ff;
+}
+.fishing-traffic-light.compact {
+  margin: 16px 0 0;
+}
+.closures-card {
+  padding: 22px;
+}
+.closures-list {
+  display: grid;
+  gap: 14px;
+}
+.closure-item {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+.closure-item > span {
+  width: 62px;
+  height: 62px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: #f3f8ff;
+}
+.closure-item > span svg {
+  width: 30px;
+  height: 30px;
+}
+.closure-item h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.closure-item p {
+  margin: 2px 0;
+  font-size: 14px;
+  color: #556376;
+}
+.closure-item strong {
+  font-size: 15px;
+}
+.closure-item.emerald h2,
+.closure-item.emerald strong,
+.closure-item.emerald > span {
+  color: #129c84;
+}
+.closure-item.violet h2,
+.closure-item.violet strong,
+.closure-item.violet > span {
+  color: #6f46c9;
+}
+.closure-item.rose h2,
+.closure-item.rose strong,
+.closure-item.rose > span {
+  color: #e07d90;
+}
+.closure-item.navy h2,
+.closure-item.navy strong,
+.closure-item.navy > span {
+  color: #123f84;
+}
+.closures-note {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: #f4f9ff;
+}
+.closures-note svg {
+  width: 18px;
+  color: var(--blue);
+  flex: 0 0 auto;
+}
+.closures-sources {
+  margin-top: 14px;
+}
+.closures-sources a {
+  color: var(--blue);
+  font-weight: 650;
 }
 @media (max-width: 1100px) {
   .weather-selector {
@@ -790,6 +1064,12 @@
   }
   .selected-day-metrics > div:nth-last-child(-n + 2) {
     border-bottom: 0;
+  }
+  .tide-solunar-grid {
+    grid-template-columns: 1fr;
+  }
+  .trip-forecast-top {
+    display: grid;
   }
 }
 @media (max-width: 650px) {
@@ -823,5 +1103,14 @@
   }
   .best-fishing-hours > span {
     justify-content: flex-start;
+  }
+  .tide-event-grid {
+    grid-template-columns: 1fr;
+  }
+  .closure-item {
+    grid-template-columns: 1fr;
+  }
+  .closure-item > span {
+    margin: 0 auto;
   }
 }

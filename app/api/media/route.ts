@@ -1,25 +1,18 @@
-import { env } from "cloudflare:workers";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { database, ensureDatabase, now } from "@/db/runtime";
+import { requestIdentity } from "@/lib/server/auth";
 
 export const dynamic = "force-dynamic";
-type Bucket = {
-  put: (key: string, value: ArrayBuffer, options?: unknown) => Promise<void>;
-  get: (
-    key: string,
-  ) => Promise<{
-    body: ReadableStream;
-    httpMetadata?: { contentType?: string };
-  } | null>;
-  delete: (key: string) => Promise<void>;
-};
-const bucket = () => (env as unknown as { BUCKET: Bucket }).BUCKET;
-const user = (request: NextRequest) =>
-  request.headers.get("oai-authenticated-user-email")?.toLowerCase() ||
-  (request.nextUrl.hostname === "localhost" ||
-  request.nextUrl.hostname === "127.0.0.1"
-    ? "capitan@yucafish.local"
-    : null);
+
+function uploadsRoot() {
+  return (
+    process.env.GOFISHING_UPLOADS_DIR ||
+    process.env.UPLOADS_DIR ||
+    path.join(/*turbopackIgnore: true*/ process.cwd(), "storage", "uploads")
+  );
+}
 
 function validMagic(bytes: Uint8Array, type: string) {
   if (type === "image/jpeg")
@@ -40,7 +33,7 @@ function validMagic(bytes: Uint8Array, type: string) {
 }
 
 export async function POST(request: NextRequest) {
-  const email = user(request);
+  const email = requestIdentity(request);
   if (!email)
     return NextResponse.json(
       { error: "Inicia sesión para continuar." },
@@ -51,7 +44,8 @@ export async function POST(request: NextRequest) {
   const file = data.get("file");
   const tripId = String(data.get("tripId") || "");
   const catchId = String(data.get("catchId") || "");
-  if (!(file instanceof File) || !tripId || !catchId)
+  const kind = String(data.get("kind") || "");
+  if (!(file instanceof File) || (!tripId && kind !== "avatar"))
     return NextResponse.json(
       { error: "Selecciona una fotografía válida." },
       { status: 422 },
@@ -68,15 +62,29 @@ export async function POST(request: NextRequest) {
       { status: 415 },
     );
   const db = database();
-  const owned = await db
-    .prepare(
-      "SELECT c.id FROM catches c JOIN fishing_trips t ON t.id=c.trip_id WHERE c.id=? AND c.trip_id=? AND c.owner_email=? AND t.owner_email=? AND c.deleted_at IS NULL AND t.deleted_at IS NULL",
-    )
-    .bind(catchId, tripId, email, email)
-    .first();
-  if (!owned)
+  const owned =
+    kind === "avatar"
+      ? { id: email }
+      : catchId
+        ? await db
+            .prepare(
+              "SELECT c.id FROM catches c JOIN fishing_trips t ON t.id=c.trip_id WHERE c.id=? AND c.trip_id=? AND c.owner_email=? AND t.owner_email=? AND c.deleted_at IS NULL AND t.deleted_at IS NULL",
+            )
+            .bind(catchId, tripId, email, email)
+            .first()
+        : await db
+            .prepare(
+              "SELECT id FROM fishing_trips WHERE id=? AND owner_email=? AND deleted_at IS NULL",
+            )
+            .bind(tripId, email)
+            .first();
+  if (!owned && kind !== "avatar")
     return NextResponse.json(
-      { error: "No tienes permiso para agregar imágenes a esta captura." },
+      {
+        error: catchId
+          ? "No tienes permiso para agregar imágenes a esta captura."
+          : "No tienes permiso para agregar una portada a esta pesca.",
+      },
       { status: 403 },
     );
   const id = crypto.randomUUID();
@@ -86,10 +94,13 @@ export async function POST(request: NextRequest) {
       : file.type === "image/webp"
         ? "webp"
         : "jpg";
-  const key = `users/${await safeHash(email)}/trips/${tripId}/${id}.${ext}`;
-  await bucket().put(key, bytes.buffer, {
-    httpMetadata: { contentType: file.type },
-  });
+  const key =
+    kind === "avatar"
+      ? `users/${await safeHash(email)}/avatars/${id}.${ext}`
+      : `users/${await safeHash(email)}/trips/${tripId}/${id}.${ext}`;
+  const filePath = path.join(uploadsRoot(), key);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, bytes);
   await db
     .prepare(
       "INSERT INTO media_assets (id, owner_email, trip_id, catch_id, storage_key, mime_type, size_bytes, alt_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -97,12 +108,16 @@ export async function POST(request: NextRequest) {
     .bind(
       id,
       email,
-      tripId,
-      catchId,
+      tripId || null,
+      catchId || null,
       key,
       file.type,
       file.size,
-      `Captura de pesca: ${file.name.replace(/\.[^.]+$/, "")}`,
+      kind === "avatar"
+        ? `Avatar de perfil: ${file.name.replace(/\.[^.]+$/, "")}`
+        : catchId
+          ? `Captura de pesca: ${file.name.replace(/\.[^.]+$/, "")}`
+          : `Portada de pesca: ${file.name.replace(/\.[^.]+$/, "")}`,
       now(),
     )
     .run();
@@ -110,30 +125,56 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  const email = user(request);
-  if (!email) return new NextResponse("Unauthorized", { status: 401 });
+  const email = requestIdentity(request);
   await ensureDatabase();
   const id = request.nextUrl.searchParams.get("id");
   const asset = await database()
     .prepare(
-      "SELECT storage_key, mime_type FROM media_assets WHERE id=? AND owner_email=? AND deleted_at IS NULL",
+      "SELECT m.storage_key, m.mime_type, m.owner_email, m.trip_id, p.public_profile_enabled, p.status AS profile_status, t.public_share, t.status AS trip_status, t.deleted_at AS trip_deleted_at FROM media_assets m LEFT JOIN profiles p ON p.email=m.owner_email LEFT JOIN fishing_trips t ON t.id=m.trip_id WHERE m.id=? AND m.deleted_at IS NULL LIMIT 1",
     )
-    .bind(id, email)
-    .first<{ storage_key: string; mime_type: string }>();
+    .bind(id)
+    .first<{
+      storage_key: string;
+      mime_type: string;
+      owner_email: string;
+      trip_id: string | null;
+      public_profile_enabled: number | null;
+      profile_status: string | null;
+      public_share: number | null;
+      trip_status: string | null;
+      trip_deleted_at: string | null;
+    }>();
   if (!asset) return new NextResponse("Not found", { status: 404 });
-  const object = await bucket().get(asset.storage_key);
-  if (!object) return new NextResponse("Not found", { status: 404 });
-  return new NextResponse(object.body, {
-    headers: {
-      "content-type": asset.mime_type,
-      "cache-control": "private, max-age=3600",
-      "x-content-type-options": "nosniff",
-    },
-  });
+  const isOwner = Boolean(email) && asset.owner_email === email;
+  const isPublicTrip =
+    Boolean(asset.trip_id) &&
+    Number(asset.public_share || 0) === 1 &&
+    asset.trip_status === "COMPLETED" &&
+    !asset.trip_deleted_at &&
+    Number(asset.public_profile_enabled || 0) === 1 &&
+    asset.profile_status === "ACTIVE";
+  const isPublicAvatar =
+    !asset.trip_id &&
+    Number(asset.public_profile_enabled || 0) === 1 &&
+    asset.profile_status === "ACTIVE";
+  if (!isOwner && !isPublicTrip && !isPublicAvatar)
+    return new NextResponse("Unauthorized", { status: 401 });
+  try {
+    const body = await readFile(path.join(uploadsRoot(), asset.storage_key));
+    return new NextResponse(body, {
+      headers: {
+        "content-type": asset.mime_type,
+        "cache-control": "private, max-age=3600",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  } catch {
+    return new NextResponse("Not found", { status: 404 });
+  }
 }
 
 export async function DELETE(request: NextRequest) {
-  const email = user(request);
+  const email = requestIdentity(request);
   if (!email)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   await ensureDatabase();
@@ -146,7 +187,7 @@ export async function DELETE(request: NextRequest) {
     .bind(id, email)
     .first<{ storage_key: string }>();
   if (!asset) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  await bucket().delete(asset.storage_key);
+  await rm(path.join(uploadsRoot(), asset.storage_key), { force: true });
   await db
     .prepare(
       "UPDATE media_assets SET deleted_at=? WHERE id=? AND owner_email=?",

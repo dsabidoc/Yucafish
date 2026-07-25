@@ -30,5 +30,18 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "vite.config.ts",
+    "worker",
+    "build",
+    "cloudflare-env.d.ts",
+    "db/index.ts",
+    "app/chatgpt-auth.ts",
+    "examples",
+    "app/page 2.tsx",
+    "app/layout 2.tsx",
+    "public/favicon 2.svg",
+    "tests/rendered-html.test 2.mjs"
+  ]
 }

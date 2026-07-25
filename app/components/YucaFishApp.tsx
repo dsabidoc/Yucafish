@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element -- protected R2 images use authenticated API URLs */
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import Cropper from "react-easy-crop";
 import {
   Anchor,
   Award,
@@ -186,6 +187,12 @@ type CropTask = {
   outputHeight: number;
   round?: boolean;
 };
+type CroppedAreaPixels = {
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+};
 
 const emptyData: AppData = {
   profile: {
@@ -250,8 +257,6 @@ const slugInput = (value: string) =>
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/(^-|-$)/g, "");
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(Math.max(value, min), max);
 const fileNameWithExtension = (name: string, fallback: string) => {
   const normalized = name.replace(/\.[^.]+$/, "") || fallback;
   return `${normalized}.jpg`;
@@ -267,38 +272,42 @@ async function readFileAsImage(file: File) {
   });
   return { image, src };
 }
+const radians = (degrees: number) => (degrees * Math.PI) / 180;
+const rotateSize = (width: number, height: number, rotation: number) => {
+  const angle = radians(rotation);
+  return {
+    width:
+      Math.abs(Math.cos(angle) * width) + Math.abs(Math.sin(angle) * height),
+    height:
+      Math.abs(Math.sin(angle) * width) + Math.abs(Math.cos(angle) * height),
+  };
+};
 async function renderCroppedImage(
   file: File,
   crop: {
-    aspect: number;
     outputWidth: number;
     outputHeight: number;
-    zoom: number;
-    offsetX: number;
-    offsetY: number;
+    rotation: number;
+    croppedAreaPixels: CroppedAreaPixels;
   },
 ) {
   const { image, src } = await readFileAsImage(file);
   try {
-    const cropWidth = 1000;
-    const cropHeight = cropWidth / crop.aspect;
-    const baseScale = Math.max(cropWidth / image.naturalWidth, cropHeight / image.naturalHeight);
-    const displayWidth = image.naturalWidth * baseScale * crop.zoom;
-    const displayHeight = image.naturalHeight * baseScale * crop.zoom;
-    const left = (cropWidth - displayWidth) / 2 + crop.offsetX;
-    const top = (cropHeight - displayHeight) / 2 + crop.offsetY;
-    const sourceX = clamp((-left * image.naturalWidth) / displayWidth, 0, image.naturalWidth);
-    const sourceY = clamp((-top * image.naturalHeight) / displayHeight, 0, image.naturalHeight);
-    const sourceWidth = clamp(
-      (cropWidth * image.naturalWidth) / displayWidth,
-      1,
-      image.naturalWidth - sourceX,
+    const safeArea = document.createElement("canvas");
+    const safeContext = safeArea.getContext("2d");
+    if (!safeContext) throw new Error("No pudimos preparar el recorte.");
+    const rotatedBounds = rotateSize(
+      image.naturalWidth,
+      image.naturalHeight,
+      crop.rotation,
     );
-    const sourceHeight = clamp(
-      (cropHeight * image.naturalHeight) / displayHeight,
-      1,
-      image.naturalHeight - sourceY,
-    );
+    safeArea.width = Math.ceil(rotatedBounds.width);
+    safeArea.height = Math.ceil(rotatedBounds.height);
+    safeContext.translate(safeArea.width / 2, safeArea.height / 2);
+    safeContext.rotate(radians(crop.rotation));
+    safeContext.translate(-image.naturalWidth / 2, -image.naturalHeight / 2);
+    safeContext.drawImage(image, 0, 0);
+
     const canvas = document.createElement("canvas");
     canvas.width = crop.outputWidth;
     canvas.height = crop.outputHeight;
@@ -307,11 +316,11 @@ async function renderCroppedImage(
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = "high";
     context.drawImage(
-      image,
-      sourceX,
-      sourceY,
-      sourceWidth,
-      sourceHeight,
+      safeArea,
+      crop.croppedAreaPixels.x,
+      crop.croppedAreaPixels.y,
+      crop.croppedAreaPixels.width,
+      crop.croppedAreaPixels.height,
       0,
       0,
       crop.outputWidth,
@@ -4647,54 +4656,22 @@ function ImageCropModal({
   cancel: () => void;
   confirm: (file: File) => void;
 }) {
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [dimensions, setDimensions] = useState({ width: 1, height: 1 });
+  const previewUrl = useMemo(() => URL.createObjectURL(task.file), [task.file]);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const dragState = useRef<{
-    x: number;
-    y: number;
-    startX: number;
-    startY: number;
-    pointerId: number;
-  } | null>(null);
-  const cropWidth = 1000;
-  const cropHeight = cropWidth / task.aspect;
-  const baseScale = useMemo(
-    () => Math.max(cropWidth / dimensions.width, cropHeight / dimensions.height),
-    [cropHeight, dimensions.height, dimensions.width],
-  );
-  const displayWidth = dimensions.width * baseScale * zoom;
-  const displayHeight = dimensions.height * baseScale * zoom;
-  const maxOffsetX = Math.max(0, (displayWidth - cropWidth) / 2);
-  const maxOffsetY = Math.max(0, (displayHeight - cropHeight) / 2);
-  const normalizedOffset = {
-    x: clamp(offset.x, -maxOffsetX, maxOffsetX),
-    y: clamp(offset.y, -maxOffsetY, maxOffsetY),
-  };
+  const [rotation] = useState(0);
+  const [croppedAreaPixels, setCroppedAreaPixels] =
+    useState<CroppedAreaPixels | null>(null);
+
+  useEffect(() => () => URL.revokeObjectURL(previewUrl), [previewUrl]);
 
   useEffect(() => {
-    const url = URL.createObjectURL(task.file);
-    setPreviewUrl(url);
-    const image = new Image();
-    image.onload = () => {
-      setDimensions({
-        width: image.naturalWidth || 1,
-        height: image.naturalHeight || 1,
-      });
-      setZoom(1);
-      setOffset({ x: 0, y: 0 });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") cancel();
     };
-    image.src = url;
-    return () => URL.revokeObjectURL(url);
-  }, [task.file]);
-
-  useEffect(() => {
-    setOffset((current) => ({
-      x: clamp(current.x, -maxOffsetX, maxOffsetX),
-      y: clamp(current.y, -maxOffsetY, maxOffsetY),
-    }));
-  }, [maxOffsetX, maxOffsetY]);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cancel]);
 
   return (
     <div
@@ -4718,58 +4695,36 @@ function ImageCropModal({
           <div
             className={`cropper-stage ${task.round ? "round" : ""}`}
             style={{ aspectRatio: `${task.aspect}` }}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
-              dragState.current = {
-                x: event.clientX,
-                y: event.clientY,
-                startX: normalizedOffset.x,
-                startY: normalizedOffset.y,
-                pointerId: event.pointerId,
-              };
-            }}
-            onPointerMove={(event) => {
-              if (!dragState.current || dragState.current.pointerId !== event.pointerId)
-                return;
-              event.preventDefault();
-              setOffset({
-                x: clamp(
-                  dragState.current.startX + (event.clientX - dragState.current.x),
-                  -maxOffsetX,
-                  maxOffsetX,
-                ),
-                y: clamp(
-                  dragState.current.startY + (event.clientY - dragState.current.y),
-                  -maxOffsetY,
-                  maxOffsetY,
-                ),
-              });
-            }}
-            onPointerUp={() => {
-              dragState.current = null;
-            }}
-            onPointerCancel={() => {
-              dragState.current = null;
-            }}
-            onPointerLeave={() => {
-              dragState.current = null;
-            }}
           >
-            {previewUrl ? (
-              <img
-                src={previewUrl}
-                alt="Vista previa"
-                draggable={false}
-                style={{
-                  width: `${displayWidth}px`,
-                  height: `${displayHeight}px`,
-                  left: "50%",
-                  top: "50%",
-                  transform: `translate(-50%, -50%) translate(${normalizedOffset.x}px, ${normalizedOffset.y}px)`,
-                }}
-              />
-            ) : null}
+            <Cropper
+              image={previewUrl}
+              crop={crop}
+              zoom={zoom}
+              rotation={rotation}
+              aspect={task.aspect}
+              cropShape={task.round ? "round" : "rect"}
+              showGrid={false}
+              restrictPosition
+              zoomWithScroll
+              minZoom={1}
+              maxZoom={4}
+              objectFit="contain"
+              onCropChange={setCrop}
+              onZoomChange={setZoom}
+              onCropComplete={(_, pixels) =>
+                setCroppedAreaPixels({
+                  x: Math.round(pixels.x),
+                  y: Math.round(pixels.y),
+                  width: Math.round(pixels.width),
+                  height: Math.round(pixels.height),
+                })
+              }
+              classes={{
+                containerClassName: "cropper-engine-container",
+                mediaClassName: "cropper-engine-media",
+                cropAreaClassName: "cropper-engine-area",
+              }}
+            />
             <div className="cropper-frame" />
           </div>
           <div className="cropper-controls">
@@ -4778,7 +4733,7 @@ function ImageCropModal({
               <input
                 type="range"
                 min="1"
-                max="3"
+                max="4"
                 step="0.01"
                 value={zoom}
                 onChange={(event) => setZoom(Number(event.target.value))}
@@ -4798,13 +4753,12 @@ function ImageCropModal({
             className="button primary"
             type="button"
             onClick={async () => {
+              if (!croppedAreaPixels) return;
               const cropped = await renderCroppedImage(task.file, {
-                aspect: task.aspect,
                 outputWidth: task.outputWidth,
                 outputHeight: task.outputHeight,
-                zoom,
-                offsetX: normalizedOffset.x,
-                offsetY: normalizedOffset.y,
+                rotation,
+                croppedAreaPixels,
               });
               confirm(cropped);
             }}

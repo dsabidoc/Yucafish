@@ -45,6 +45,81 @@ export type DailyForecast = {
   windDirectionDominantDegrees: number | null;
 };
 
+export type TideStation = {
+  id: string;
+  slug?: string | null;
+  name: string;
+  region: string | null;
+  country: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  label: string | null;
+  distanceKm?: number | null;
+};
+
+export type TideExtreme = {
+  time: string;
+  localTime: string | null;
+  localDate: string | null;
+  heightMeters: number | null;
+  type: "high" | "low";
+};
+
+export type TideSeriesPoint = {
+  time: string;
+  heightMeters: number | null;
+};
+
+export type SolunarPeriod = {
+  type: "major" | "minor";
+  start: string | null;
+  end: string | null;
+  peak: string | null;
+  startLocal: string | null;
+  endLocal: string | null;
+  peakLocal: string | null;
+  enhanced: boolean;
+};
+
+export type DailySolunarCondition = {
+  date: string;
+  sunrise: string | null;
+  sunset: string | null;
+  sunriseLocal: string | null;
+  sunsetLocal: string | null;
+  moonPhase: string | null;
+  moonPhaseValue: number | null;
+  moonIllumination: number | null;
+  solunarRating: number | null;
+  solunarLabel: string | null;
+  springNeap: string | null;
+  solunarPeriods: SolunarPeriod[];
+};
+
+export type TideSummary = {
+  station: TideStation;
+  datum: "LAT" | "MLLW" | "MSL";
+  extremes: TideExtreme[];
+  timeSeries: TideSeriesPoint[];
+  sunrise: string | null;
+  sunset: string | null;
+  sunriseLocal: string | null;
+  sunsetLocal: string | null;
+  moonPhase: string | null;
+  moonPhaseValue: number | null;
+  moonIllumination: number | null;
+  tidalStrength: string | null;
+  tidalStrengthValue: number | null;
+  springNeap: string | null;
+  moonCalendar: Array<{
+    type: string | null;
+    name: string | null;
+    date: string | null;
+    dateLocal: string | null;
+  }>;
+  dailyConditions: DailySolunarCondition[];
+};
+
 export type FishingConditionIndicator = {
   level: "IDEAL" | "FAVORABLE" | "CAUTION" | "DIFFICULT" | "INSUFFICIENT";
   label: string;
@@ -64,7 +139,14 @@ export type DailyFishingOutlook = {
 };
 
 export type PortForecast = {
-  location: { id: string; name: string; timezone: string };
+  location: {
+    id: string;
+    name: string;
+    timezone: string;
+    tideCheckEnabled?: boolean;
+    tideCheckStationId?: string | null;
+    tideCheckStationName?: string | null;
+  };
   currentWeather: WeatherCondition | null;
   currentMarine: MarineCondition | null;
   hourly: Array<{
@@ -74,9 +156,11 @@ export type PortForecast = {
   }>;
   daily: DailyForecast[];
   dailyFishingOutlooks: DailyFishingOutlook[];
+  tides: TideSummary | null;
+  tideUnavailableReason: string | null;
   fetchedAt: string;
   cachedUntil: string;
-  provider: "open-meteo";
+  provider: "open-meteo+tidecheck" | "open-meteo";
   isStale: boolean;
   partialError: "weather" | "marine" | null;
   condition: FishingConditionIndicator;
@@ -96,6 +180,15 @@ export type WeatherLocation = {
   marineLongitude: number | null;
   timezone: string;
   isWeatherEnabled: boolean;
+  tideCheckEnabled?: boolean;
+  tideCheckStationId?: string | null;
+  tideCheckStationName?: string | null;
+  tideCheckStationLatitude?: number | null;
+  tideCheckStationLongitude?: number | null;
+  tideCheckStationState?: string | null;
+  tideCheckStationCountry?: string | null;
+  stationVerifiedAt?: string | null;
+  stationVerifiedBy?: string | null;
   active: boolean;
   sortOrder: number;
 };

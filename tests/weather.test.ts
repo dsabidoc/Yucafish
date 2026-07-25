@@ -19,7 +19,11 @@ import {
   WeatherProviderError,
   WeatherValidationError,
 } from "../lib/weather/errors";
-import { weatherResponseSchema } from "../lib/weather/schemas";
+import {
+  tideCheckResponseSchema,
+  weatherResponseSchema,
+} from "../lib/weather/schemas";
+import { isInsideYucatan } from "../lib/weather/geofence";
 import type { MarineCondition, WeatherCondition } from "../lib/weather/types";
 
 const originalFetch = globalThis.fetch;
@@ -264,4 +268,78 @@ test("rechaza JSON inválido del proveedor", async () => {
       ),
     WeatherValidationError,
   );
+});
+
+test("valida el geofence de Yucatán con margen marino controlado", () => {
+  assert.equal(isInsideYucatan(21.16518, -90.03113), true);
+  assert.equal(
+    isInsideYucatan(21.207, -90.045, { allowMarineMarginKm: 12 }),
+    true,
+  );
+  assert.equal(isInsideYucatan(18.5, -90.1), false);
+});
+
+test("acepta la estructura documentada de TideCheck", () => {
+  const parsed = tideCheckResponseSchema.safeParse({
+    station: {
+      id: "9414290",
+      name: "San Francisco",
+      region: "California",
+      country: "United States",
+      lat: 37.8063,
+      lng: -122.4659,
+      timezone: "America/Los_Angeles",
+    },
+    datum: "LAT",
+    extremes: [
+      {
+        time: "2026-07-23T03:24:00.000Z",
+        localTime: "2026-07-22T20:24:00-07:00",
+        localDate: "2026-07-22",
+        height: 1.842,
+        type: "high",
+      },
+    ],
+    timeSeries: [{ time: "2026-07-23T00:00:00.000Z", height: 1.234 }],
+    conditions: {
+      sunrise: "2026-07-23T14:29:00.000Z",
+      sunset: "2026-07-24T02:12:00.000Z",
+      sunriseLocal: "2026-07-23T07:29:00-07:00",
+      sunsetLocal: "2026-07-23T19:12:00-07:00",
+      moonPhase: "Waxing Gibbous",
+      moonPhaseValue: 0.352,
+      moonIllumination: 68,
+      tidalStrength: "Moderate",
+      tidalStrengthValue: 0.55,
+      springNeap: "Neap",
+    },
+    dailyConditions: [
+      {
+        date: "2026-07-23",
+        sunrise: "2026-07-23T14:29:00.000Z",
+        sunset: "2026-07-24T02:12:00.000Z",
+        sunriseLocal: "2026-07-23T07:29:00-07:00",
+        sunsetLocal: "2026-07-23T19:12:00-07:00",
+        moonPhase: "Waxing Gibbous",
+        moonPhaseValue: 0.352,
+        moonIllumination: 68,
+        solunarRating: 3,
+        solunarLabel: "Good",
+        springNeap: "Neap",
+        solunarPeriods: [
+          {
+            type: "major",
+            start: "2026-07-23T11:30:00.000Z",
+            end: "2026-07-23T13:30:00.000Z",
+            peak: "2026-07-23T12:30:00.000Z",
+            startLocal: "2026-07-23T04:30:00-07:00",
+            endLocal: "2026-07-23T06:30:00-07:00",
+            peakLocal: "2026-07-23T05:30:00-07:00",
+            enhanced: true,
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(parsed.success, true);
 });
