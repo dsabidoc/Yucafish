@@ -271,7 +271,27 @@ const fileNameWithExtension = (name: string, fallback: string) => {
   const normalized = name.replace(/\.[^.]+$/, "") || fallback;
   return `${normalized}.jpg`;
 };
-async function readFileAsImage(file: File) {
+type CropImageSource =
+  | { image: ImageBitmap; src: null; close: () => void; width: number; height: number }
+  | { image: HTMLImageElement; src: string; close: () => void; width: number; height: number };
+
+async function readFileAsImage(file: File): Promise<CropImageSource> {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(file, {
+        imageOrientation: "from-image",
+      });
+      return {
+        image: bitmap,
+        src: null,
+        close: () => bitmap.close(),
+        width: bitmap.width,
+        height: bitmap.height,
+      };
+    } catch {
+      // Si el navegador no soporta bien imageOrientation, usamos el fallback.
+    }
+  }
   const src = URL.createObjectURL(file);
   const image = new Image();
   image.decoding = "async";
@@ -280,7 +300,13 @@ async function readFileAsImage(file: File) {
     image.onload = () => resolve();
     image.onerror = () => reject(new Error("No pudimos abrir la imagen."));
   });
-  return { image, src };
+  return {
+    image,
+    src,
+    close: () => URL.revokeObjectURL(src),
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+  };
 }
 const radians = (degrees: number) => (degrees * Math.PI) / 180;
 const rotateSize = (width: number, height: number, rotation: number) => {
@@ -301,22 +327,22 @@ async function renderCroppedImage(
     croppedAreaPixels: CroppedAreaPixels;
   },
 ) {
-  const { image, src } = await readFileAsImage(file);
+  const source = await readFileAsImage(file);
   try {
     const safeArea = document.createElement("canvas");
     const safeContext = safeArea.getContext("2d");
     if (!safeContext) throw new Error("No pudimos preparar el recorte.");
     const rotatedBounds = rotateSize(
-      image.naturalWidth,
-      image.naturalHeight,
+      source.width,
+      source.height,
       crop.rotation,
     );
     safeArea.width = Math.ceil(rotatedBounds.width);
     safeArea.height = Math.ceil(rotatedBounds.height);
     safeContext.translate(safeArea.width / 2, safeArea.height / 2);
     safeContext.rotate(radians(crop.rotation));
-    safeContext.translate(-image.naturalWidth / 2, -image.naturalHeight / 2);
-    safeContext.drawImage(image, 0, 0);
+    safeContext.translate(-source.width / 2, -source.height / 2);
+    safeContext.drawImage(source.image, 0, 0, source.width, source.height);
 
     const canvas = document.createElement("canvas");
     canvas.width = crop.outputWidth;
@@ -351,7 +377,7 @@ async function renderCroppedImage(
       lastModified: Date.now(),
     });
   } finally {
-    URL.revokeObjectURL(src);
+    source.close();
   }
 }
 
