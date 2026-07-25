@@ -193,6 +193,16 @@ type CroppedAreaPixels = {
   x: number;
   y: number;
 };
+type CropperMediaSize = {
+  width: number;
+  height: number;
+  naturalWidth: number;
+  naturalHeight: number;
+};
+type CropperAreaSize = {
+  width: number;
+  height: number;
+};
 
 const emptyData: AppData = {
   profile: {
@@ -4660,8 +4670,24 @@ function ImageCropModal({
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [rotation] = useState(0);
+  const [mediaSize, setMediaSize] = useState<CropperMediaSize | null>(null);
+  const [cropSize, setCropSize] = useState<CropperAreaSize | null>(null);
   const [croppedAreaPixels, setCroppedAreaPixels] =
     useState<CroppedAreaPixels | null>(null);
+  const rotatedMediaBounds = useMemo(
+    () =>
+      mediaSize
+        ? rotateSize(mediaSize.width, mediaSize.height, rotation)
+        : { width: 0, height: 0 },
+    [mediaSize, rotation],
+  );
+  const maxHorizontalOffset = useMemo(() => {
+    if (!cropSize || !mediaSize) return 0;
+    return Math.max(
+      0,
+      Math.abs((rotatedMediaBounds.width * zoom) / 2 - cropSize.width / 2),
+    );
+  }, [cropSize, mediaSize, rotatedMediaBounds.width, zoom]);
 
   useEffect(() => () => URL.revokeObjectURL(previewUrl), [previewUrl]);
 
@@ -4672,6 +4698,19 @@ function ImageCropModal({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [cancel]);
+
+  useEffect(() => {
+    if (!maxHorizontalOffset && crop.x !== 0) {
+      setCrop((current) => ({ ...current, x: 0 }));
+      return;
+    }
+    if (Math.abs(crop.x) > maxHorizontalOffset) {
+      setCrop((current) => ({
+        ...current,
+        x: Math.max(-maxHorizontalOffset, Math.min(maxHorizontalOffset, current.x)),
+      }));
+    }
+  }, [crop.x, maxHorizontalOffset]);
 
   return (
     <div
@@ -4711,6 +4750,15 @@ function ImageCropModal({
               objectFit="contain"
               onCropChange={setCrop}
               onZoomChange={setZoom}
+              onMediaLoaded={(size) =>
+                setMediaSize({
+                  width: size.width,
+                  height: size.height,
+                  naturalWidth: size.naturalWidth,
+                  naturalHeight: size.naturalHeight,
+                })
+              }
+              onCropSizeChange={(size) => setCropSize(size)}
               onCropComplete={(_, pixels) =>
                 setCroppedAreaPixels({
                   x: Math.round(pixels.x),
@@ -4737,6 +4785,27 @@ function ImageCropModal({
                 step="0.01"
                 value={zoom}
                 onChange={(event) => setZoom(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              <span>Horizontal</span>
+              <input
+                type="range"
+                min={maxHorizontalOffset ? -maxHorizontalOffset : 0}
+                max={maxHorizontalOffset || 0}
+                step="1"
+                value={Math.max(
+                  maxHorizontalOffset ? -maxHorizontalOffset : 0,
+                  Math.min(maxHorizontalOffset || 0, crop.x),
+                )}
+                onChange={(event) =>
+                  setCrop((current) => ({
+                    ...current,
+                    x: Number(event.target.value),
+                  }))
+                }
+                disabled={!maxHorizontalOffset}
+                aria-label="Mover imagen horizontalmente"
               />
             </label>
             <div className="cropper-hint">
