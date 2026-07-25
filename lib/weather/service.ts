@@ -29,19 +29,7 @@ import type {
 } from "./types";
 
 function usesMysql() {
-  const configured = (
-    process.env.GOFISHING_DB_CLIENT ||
-    process.env.DB_CLIENT ||
-    ""
-  )
-    .trim()
-    .toLowerCase();
-  if (configured === "mysql" || configured === "mariadb") return true;
-  return Boolean(
-    process.env.GOFISHING_DB_HOST ||
-      process.env.DB_HOST ||
-      process.env.DATABASE_URL,
-  );
+  return (process.env.DATABASE_URL || "").trim().startsWith("mysql://");
 }
 
 type CacheRow = {

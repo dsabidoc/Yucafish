@@ -6,8 +6,12 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "db:check-config": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --env-file-if-exists=.env.production ./node_modules/tsx/dist/cli.mjs scripts/check-database-config.ts",
+    "predev": "npm run db:check-config",
     "dev": "next dev",
+    "prebuild": "npm run db:check-config",
     "build": "next build",
+    "prestart": "npm run db:check-config",
     "start": "next start",
     "test": "npm run build && tsx --test tests/*.test.mjs tests/*.test.ts",
     "test:integration": "node tests/api.integration.mjs",

@@ -1,4 +1,4 @@
-# Arquitectura y operación de YucaFish
+# Arquitectura y operación de GoFishing.mx
 
 ## Dominios
 
@@ -11,8 +11,8 @@ flowchart LR
   U[Usuario] --> A[Sign in with ChatGPT]
   A --> UI[Next.js App Router]
   UI --> API[API de dominios]
-  API -->|datos estructurados| D1[(Cloudflare D1)]
-  API -->|bytes privados| R2[(Cloudflare R2)]
+  API -->|datos estructurados| MYSQL[(MySQL yucafish)]
+  API -->|bytes privados| STORAGE[(Almacenamiento privado)]
   API --> AUD[Auditoría sin datos sensibles]
 ```
 
@@ -51,23 +51,23 @@ Las estadísticas y logros se calculan desde registros autorizados para evitar c
 - CSP, HSTS, protección de framing, `nosniff`, política de permisos y referrer policy.
 - Auditoría con hash parcial irreversible del actor; nunca contraseñas, tokens o binarios.
 - SQL preparado y validación duplicada en servidor. Errores seguros sin stack trace al usuario.
-- Open-Meteo se consulta únicamente desde el servidor, con hosts permitidos, timeout, límite de respuesta, Zod, un reintento controlado, rate limiting persistente y caché D1 con tolerancia a datos obsoletos.
+- Open-Meteo se consulta únicamente desde el servidor, con hosts permitidos, timeout, límite de respuesta, Zod, un reintento controlado, rate limiting persistente y caché MySQL con tolerancia a datos obsoletos.
 
 ## Correo y autenticación
 
-La identidad y verificación de correo son responsabilidad del flujo administrado por la plataforma. Por eso YucaFish no implementa criptografía, restablecimiento de contraseña ni plantillas que simulen correos. Si en una segunda implementación pública se migra a Supabase Auth, se deben configurar plantillas reales de verificación, recuperación, cambio de contraseña y bienvenida mediante el proveedor, junto con rate limiting distribuido.
+La autenticación, verificación de correo, recuperación y restablecimiento se resuelven dentro de la aplicación y sus integraciones SMTP. Cualquier ajuste de identidad debe mantenerse compatible con MySQL y sin exponer secretos.
 
 ## Catálogos y datos iniciales
 
-La primera inicialización crea especies regionales sugeridas y puertos de Yucatán en D1. `Jurel` contiene los alias `curél,curel`. Estos nombres son orientativos y administrables; la interfaz no los presenta como catálogo exhaustivo.
+La base `yucafish` conserva especies regionales sugeridas y puertos de Yucatán. `Jurel` contiene los alias `curél,curel`. Estos nombres son orientativos y administrables; la interfaz no los presenta como catálogo exhaustivo.
 
 ## Migraciones, respaldo y restauración
 
-Los cambios de esquema se hacen en `db/schema.ts`, después `npm run db:generate`, inspección del SQL y despliegue controlado. Nunca ejecutar migraciones destructivas automáticamente. Para respaldos, exporta D1 antes de migrar y conserva una política de versiones del bucket R2. Para restaurar, crea una base nueva, aplica migraciones en orden, importa el respaldo validado y cambia el binding solo después de una verificación de conteos y propiedad.
+Los cambios de esquema se hacen en `db/schema.ts`, después `npm run db:generate`, inspección manual del SQL y despliegue controlado. Nunca ejecutar migraciones destructivas automáticamente. Antes de migrar, respaldar MySQL `yucafish`; para restaurar, crear una base nueva, aplicar migraciones en orden, importar el respaldo validado y cambiar la conexión solo después de verificar conteos y propiedad.
 
 ## Decisiones y contradicciones resueltas
 
-- El prompt prefería PostgreSQL/Supabase o Auth.js; Sites proporciona D1, R2 e identidad administrada, que cubren persistencia, archivos y autenticación sin almacenar contraseñas.
+- Este proyecto quedó estandarizado en MySQL para desarrollo y producción. SQLite, D1 y cualquier fallback local están prohibidos.
 - La sincronización offline compleja se deja fuera para no arriesgar integridad. La PWA es instalable y muestra la última interfaz cargada, pero no encola escrituras.
 - Compartir y descargar aparecen como arquitectura futura, no como botones inertes.
 - Las pescas conservan texto aproximado y una referencia al catálogo de puertos; no se captura GPS del usuario. Las coordenadas meteorológicas pertenecen al catálogo administrado y nunca se aceptan desde el cliente.
@@ -76,7 +76,7 @@ Los cambios de esquema se hacen en `db/schema.ts`, después `npm run db:generate
 
 1. Ejecutar lint, TypeScript, pruebas y build.
 2. Revisar la migración Drizzle y respaldar antes de cambios.
-3. Desplegar con Sites, que provisiona D1/R2 desde `.openai/hosting.json`.
+3. Desplegar en el VPS Node.js con `DATABASE_URL` apuntando a MySQL `yucafish`.
 4. Verificar `/api/health`, acceso privado, CRUD, carga de imagen y panel administrativo.
 5. Revisar logs sin exponer secretos; rotar cualquier credencial externa desde la plataforma.
 

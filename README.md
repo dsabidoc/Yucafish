@@ -1,15 +1,15 @@
-# YucaFish
+# GoFishing.mx
 
 Bitácora personal de pesca responsive y mobile-first. Permite registrar salidas y capturas, adjuntar fotografías privadas, consultar estadísticas, administrar el perfil y mantener catálogos de especies y puertos.
 
 ## Arquitectura
 
 - Next.js App Router + TypeScript estricto + React.
-- Cloudflare D1 para datos relacionales; esquema Drizzle y migraciones versionadas.
-- Cloudflare R2 para fotografías; los bytes nunca se guardan en la base de datos.
-- Sign in with ChatGPT administrado por Sites. La aplicación no almacena contraseñas, tokens ni cookies de autenticación.
+- MySQL como base de datos única y obligatoria, conectada exclusivamente mediante `DATABASE_URL`.
+- Esquema Drizzle orientado a MySQL. No existe soporte para SQLite ni fallbacks locales.
+- Archivos privados almacenados fuera de la base de datos; los bytes nunca se guardan en tablas.
 - Autorización por propietario en cada lectura y mutación. Ningún `userId` del cliente se usa para decidir acceso.
-- PWA instalable con manifest y experiencia standalone.
+- Aplicación Next.js desplegable en VPS Node.js.
 
 Consulta [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) para el modelo, rutas, decisiones, respaldos, despliegue y fase futura.
 
@@ -22,7 +22,7 @@ npm ci
 npm run dev
 ```
 
-La vista local usa únicamente la identidad de demostración `capitan@yucafish.local`, creada automáticamente con rol administrador y registros de muestra. Esta identidad no se habilita fuera de `localhost`.
+La aplicación requiere `DATABASE_URL` válida hacia MySQL desde desarrollo hasta producción. Si falta o apunta a SQLite, el proyecto falla al iniciar.
 
 Los botones **Iniciar sesión** y **Crear cuenta** abren pantallas propias de YucaFish. En local continúan a la cuenta demo; en Sites delegan registro, verificación, recuperación y sesión al proveedor seguro de la plataforma.
 
@@ -35,11 +35,11 @@ npm test
 npm run test:integration # con el servidor local activo
 ```
 
-`npm test` ejecuta el build de producción, pruebas unitarias de dominio y verificaciones de renderizado. La migración se regenera con `npm run db:generate`.
+`npm test` ejecuta el build de producción, pruebas unitarias de dominio y verificaciones de renderizado. Si se genera una migración, debe revisarse manualmente antes de aplicarla a `yucafish`.
 
 ## Variables
 
-La versión actual recibe DB, R2 e identidad desde Sites. `.env.example` documenta integraciones futuras; nunca se deben guardar secretos en el repositorio.
+La conexión a base de datos se obtiene exclusivamente desde `DATABASE_URL`, con formato `mysql://USUARIO:CONTRASENA@HOST:3306/yucafish`. Nunca se deben guardar secretos en el repositorio.
 
 ## Integración meteorológica
 
@@ -59,7 +59,7 @@ WEATHER_REQUEST_TIMEOUT_MS=10000
 OPEN_METEO_API_KEY=
 ```
 
-La caché compartida se guarda en D1 por puerto y tipo (`weather` o `marine`) durante 30–60 minutos. Si el proveedor falla, puede devolverse la última respuesta dentro de la ventana obsoleta, marcada explícitamente. Las consultas privadas admiten 30 solicitudes por minuto por usuario; un snapshot de una pesca solo puede actualizarse una vez cada cinco minutos. El snapshot verifica la propiedad de la pesca y conserva valores normalizados sin guardar la respuesta completa del proveedor.
+La caché compartida se guarda en MySQL por puerto y tipo (`weather` o `marine`) durante 30–60 minutos. Si el proveedor falla, puede devolverse la última respuesta dentro de la ventana obsoleta, marcada explícitamente. Las consultas privadas admiten 30 solicitudes por minuto por usuario; un snapshot de una pesca solo puede actualizarse una vez cada cinco minutos. El snapshot verifica la propiedad de la pesca y conserva valores normalizados sin guardar la respuesta completa del proveedor.
 
 Los doce puertos iniciales se encuentran en `db/seeds/yucatan-ports.ts`. Las coordenadas terrestres se consultaron en OpenStreetMap/Nominatim; Yucalpetén usa la estación geográfica de SEMAR. Los puntos marinos son desplazamientos públicos aproximados frente a la costa y usan `cell_selection=sea`; un administrador puede corregirlos, habilitar o deshabilitar clima, probar la consulta, limpiar caché y modificar umbrales desde el panel.
 
@@ -77,7 +77,7 @@ Limitaciones: es un pronóstico orientativo, la precisión de corrientes y marea
 
 ## Primer administrador
 
-En la demo local el perfil inicial es administrador. En producción, después del primer acceso, cambia `profiles.role` de la cuenta autorizada a `ADMIN` mediante una operación controlada de D1. No existe un endpoint público para elevar roles.
+El primer administrador se provisiona mediante un script controlado sobre MySQL. No existe un endpoint público para elevar roles.
 
 ## Docker
 
@@ -86,4 +86,4 @@ docker build -t yucafish .
 docker run --rm -p 3000:3000 yucafish
 ```
 
-La ejecución completa con datos requiere bindings D1/R2 compatibles; Sites es el destino soportado y recomendado.
+La ejecución completa con datos requiere una `DATABASE_URL` MySQL válida y las variables de correo/almacenamiento correspondientes.
