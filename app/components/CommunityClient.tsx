@@ -123,7 +123,7 @@ export function CommunityClient({
           <p>{subtitle}</p>
         </div>
         <div
-          className={profileMode ? "public-profile-hero" : "trip-card-grid"}
+          className={profileMode ? "public-profile-hero" : "trip-card-grid community-profiles-grid"}
           style={{ marginBottom: 28 }}
         >
           {profiles.map((profile) => (
@@ -184,12 +184,12 @@ export function CommunityClient({
               : "Explora las salidas públicas que cada pescador decidió mostrar a la comunidad."}
           </p>
         </div>
-        <div className="trip-card-grid">
+        <div className="trip-card-grid community-trip-list">
           {trips.map((trip) => (
             <article className="card trip-card" key={trip.id}>
-              <button className="trip-cover" onClick={() => setSelectedTrip(trip)}>
+              <button className="trip-cover community-trip-cover" onClick={() => setSelectedTrip(trip)}>
                 {trip.coverImageUrl ? (
-                  <img src={trip.coverImageUrl} alt={trip.title} />
+                  <img className="community-trip-cover-image" src={trip.coverImageUrl} alt={trip.title} />
                 ) : (
                   <span>
                     <Waves />
@@ -241,11 +241,13 @@ export function CommunityClient({
             </div>
             <div style={{ padding: 20, display: "grid", gap: 18 }}>
               {selectedTrip.coverImageUrl && (
-                <img
-                  src={selectedTrip.coverImageUrl}
-                  alt={selectedTrip.title}
-                  style={{ width: "100%", height: 260, objectFit: "cover", borderRadius: 16 }}
-                />
+                <div className="community-trip-modal-cover">
+                  <img
+                    className="community-trip-modal-cover-image"
+                    src={selectedTrip.coverImageUrl}
+                    alt={selectedTrip.title}
+                  />
+                </div>
               )}
               <div className="stat-grid" style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
                 <article className="card stat-card"><span className="stat-icon"><Fish /></span><div><p>Capturas</p><strong>{selectedCatches.length}</strong></div></article>
