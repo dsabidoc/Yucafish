@@ -1,12 +1,11 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- protected R2 images use authenticated API URLs */
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Anchor,
   Award,
   BarChart3,
-  Bell,
   CalendarDays,
   Camera,
   ChevronDown,
@@ -15,6 +14,7 @@ import {
   CloudRain,
   CloudSun,
   Compass,
+  Copy,
   Droplets,
   Edit3,
   Eye,
@@ -26,7 +26,6 @@ import {
   LogOut,
   MapPin,
   Menu,
-  MoreHorizontal,
   Plus,
   Search,
   ShieldCheck,
@@ -42,12 +41,15 @@ import {
   Weight,
   Wind,
   X,
+  Share2,
+  Users,
 } from "lucide-react";
 import { degreesToCompass, wmoCondition } from "@/lib/weather/domain";
 import type { PortForecast } from "@/lib/weather/types";
 
 type Profile = {
   email: string;
+  newEmail?: string;
   displayName: string;
   firstName: string;
   lastName: string;
@@ -58,12 +60,18 @@ type Profile = {
   weightUnit: "kg" | "lb";
   role: "USER" | "ADMIN";
   status: string;
+  publicSlug?: string;
+  publicProfileEnabled?: number | boolean;
+  avatarUrl?: string | null;
 };
 type Trip = {
   id: string;
   title: string;
   port: string;
+  ownerEmail?: string;
   departureLocationId?: string;
+  coverImageUrl?: string | null;
+  publicShare?: number | boolean;
   fishingDate: string;
   departureTime?: string;
   returnTime?: string;
@@ -101,12 +109,18 @@ type CatalogItem = {
   marineLongitude?: number;
   timezone?: string;
   isWeatherEnabled?: number | boolean;
+  tideCheckEnabled?: number | boolean;
+  tideCheckStationId?: string | null;
+  tideCheckStationName?: string | null;
+  tideCheckStationState?: string | null;
+  tideCheckStationCountry?: string | null;
+  stationVerifiedAt?: string | null;
   active: number | boolean;
 };
 type Media = {
   id: string;
   tripId: string;
-  catchId: string;
+  catchId?: string | null;
   url: string;
   altText?: string;
 };
@@ -150,9 +164,28 @@ type AppData = {
     lastUpdate: string | null;
   } | null;
   logs: Array<Record<string, string>>;
+  adminUsers: Array<Record<string, unknown>>;
+  adminTrips: Array<Record<string, unknown>>;
+  adminCatches: Array<Record<string, unknown>>;
+  adminMedia: Array<Record<string, unknown>>;
 };
 type View =
-  "dashboard" | "history" | "stats" | "weather" | "profile" | "admin" | "trip";
+  | "dashboard"
+  | "history"
+  | "stats"
+  | "weather"
+  | "closures"
+  | "profile"
+  | "admin"
+  | "trip";
+type CropTask = {
+  file: File;
+  title: string;
+  aspect: number;
+  outputWidth: number;
+  outputHeight: number;
+  round?: boolean;
+};
 
 const emptyData: AppData = {
   profile: {
@@ -167,6 +200,9 @@ const emptyData: AppData = {
     weightUnit: "kg",
     role: "USER",
     status: "ACTIVE",
+    publicSlug: "",
+    publicProfileEnabled: true,
+    avatarUrl: "",
   },
   trips: [],
   catches: [],
@@ -177,6 +213,10 @@ const emptyData: AppData = {
   weatherSettings: null,
   weatherDiagnostics: null,
   logs: [],
+  adminUsers: [],
+  adminTrips: [],
+  adminCatches: [],
+  adminMedia: [],
 };
 const mxDate = () =>
   new Intl.DateTimeFormat("en-CA", {
@@ -202,6 +242,99 @@ const kgTo = (kg: number, unit: string) =>
   unit === "lb" ? kg * 2.20462262 : kg;
 const weightLabel = (kg: number, unit: string) =>
   `${kgTo(kg, unit).toLocaleString("es-MX", { maximumFractionDigits: 2 })} ${unit}`;
+const slugInput = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/(^-|-$)/g, "");
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
+const fileNameWithExtension = (name: string, fallback: string) => {
+  const normalized = name.replace(/\.[^.]+$/, "") || fallback;
+  return `${normalized}.jpg`;
+};
+async function readFileAsImage(file: File) {
+  const src = URL.createObjectURL(file);
+  const image = new Image();
+  image.decoding = "async";
+  image.src = src;
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("No pudimos abrir la imagen."));
+  });
+  return { image, src };
+}
+async function renderCroppedImage(
+  file: File,
+  crop: {
+    aspect: number;
+    outputWidth: number;
+    outputHeight: number;
+    zoom: number;
+    offsetX: number;
+    offsetY: number;
+  },
+) {
+  const { image, src } = await readFileAsImage(file);
+  try {
+    const cropWidth = 1000;
+    const cropHeight = cropWidth / crop.aspect;
+    const baseScale = Math.max(cropWidth / image.naturalWidth, cropHeight / image.naturalHeight);
+    const displayWidth = image.naturalWidth * baseScale * crop.zoom;
+    const displayHeight = image.naturalHeight * baseScale * crop.zoom;
+    const left = (cropWidth - displayWidth) / 2 + crop.offsetX;
+    const top = (cropHeight - displayHeight) / 2 + crop.offsetY;
+    const sourceX = clamp((-left * image.naturalWidth) / displayWidth, 0, image.naturalWidth);
+    const sourceY = clamp((-top * image.naturalHeight) / displayHeight, 0, image.naturalHeight);
+    const sourceWidth = clamp(
+      (cropWidth * image.naturalWidth) / displayWidth,
+      1,
+      image.naturalWidth - sourceX,
+    );
+    const sourceHeight = clamp(
+      (cropHeight * image.naturalHeight) / displayHeight,
+      1,
+      image.naturalHeight - sourceY,
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = crop.outputWidth;
+    canvas.height = crop.outputHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("No pudimos preparar el recorte.");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      image,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      crop.outputWidth,
+      crop.outputHeight,
+    );
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (result) => {
+          if (result) resolve(result);
+          else reject(new Error("No pudimos exportar la imagen recortada."));
+        },
+        "image/jpeg",
+        0.92,
+      );
+    });
+    return new File([blob], fileNameWithExtension(file.name, "imagen"), {
+      type: "image/jpeg",
+      lastModified: Date.now(),
+    });
+  } finally {
+    URL.revokeObjectURL(src);
+  }
+}
 
 export default function YucaFishApp() {
   const [data, setData] = useState<AppData>(emptyData);
@@ -210,8 +343,12 @@ export default function YucaFishApp() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [view, setView] = useState<View>(() =>
-    typeof window !== "undefined" && window.location.pathname === "/app/clima"
-      ? "weather"
+    typeof window !== "undefined"
+      ? window.location.pathname === "/app/clima"
+        ? "weather"
+        : window.location.pathname === "/app/vedas"
+          ? "closures"
+          : "dashboard"
       : "dashboard",
   );
   const [menuOpen, setMenuOpen] = useState(false);
@@ -224,9 +361,26 @@ export default function YucaFishApp() {
   const [confirm, setConfirm] = useState<{
     title: string;
     body: string;
-    action: () => void;
+    action: () => void | Promise<void>;
+    confirmLabel?: string;
+    loadingLabel?: string;
+    tone?: "danger" | "primary";
   } | null>(null);
   const [period, setPeriod] = useState("all");
+  const [cropTask, setCropTask] = useState<CropTask | null>(null);
+  const cropResolver = useRef<((file: File | null) => void) | null>(null);
+
+  function requestCrop(task: CropTask) {
+    return new Promise<File | null>((resolve) => {
+      cropResolver.current = resolve;
+      setCropTask(task);
+    });
+  }
+  function closeCropper(result: File | null) {
+    cropResolver.current?.(result);
+    cropResolver.current = null;
+    setCropTask(null);
+  }
 
   useEffect(() => {
     void load();
@@ -284,7 +438,11 @@ export default function YucaFishApp() {
     window.history.replaceState(
       {},
       "",
-      next === "weather" ? "/app/clima" : "/app",
+      next === "weather"
+        ? "/app/clima"
+        : next === "closures"
+          ? "/app/vedas"
+          : "/app",
     );
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -313,10 +471,6 @@ export default function YucaFishApp() {
           profile={data.profile}
           openMenu={() => setMenuOpen(true)}
           navigate={navigate}
-          notify={() => {
-            setToast("No tienes notificaciones pendientes");
-            window.setTimeout(() => setToast(""), 3200);
-          }}
         />
         <main className="content" id="main-content">
           {error && (
@@ -350,9 +504,11 @@ export default function YucaFishApp() {
             <StatsView data={data} period={period} setPeriod={setPeriod} />
           )}
           {view === "weather" && <WeatherView ports={data.ports} />}
+          {view === "closures" && <ClosuresView />}
           {view === "profile" && (
             <ProfileView
               data={data}
+              requestCrop={requestCrop}
               save={async (payload) => {
                 await mutate(
                   { op: "updateProfile", ...payload },
@@ -373,15 +529,54 @@ export default function YucaFishApp() {
               addCatch={() => setCatchForm({ tripId: selectedTrip })}
               editCatch={(item) => setCatchForm({ tripId: selectedTrip, item })}
               editTrip={(trip) => setTripForm(trip)}
+              uploadCover={async (file) => {
+                const cropped = await requestCrop({
+                  file,
+                  title: "Recortar portada de la pesca",
+                  aspect: 16 / 6,
+                  outputWidth: 1600,
+                  outputHeight: 600,
+                });
+                if (!cropped) return;
+                const form = new FormData();
+                form.set("file", cropped);
+                form.set("tripId", selectedTrip);
+                const upload = await fetch("/api/media", {
+                  method: "POST",
+                  body: form,
+                });
+                const body = (await upload.json()) as {
+                  error?: string;
+                  url?: string;
+                };
+                if (!upload.ok || !body.url)
+                  throw new Error(
+                    body.error || "No pudimos subir la portada de la pesca.",
+                  );
+                await mutate(
+                  {
+                    op: "setTripCover",
+                    id: selectedTrip,
+                    coverImageUrl: body.url,
+                  },
+                  "Portada actualizada",
+                );
+              }}
               captureWeather={() =>
                 setConfirm({
                   title: "¿Guardar estas condiciones?",
                   body: "Se reemplazará el snapshot meteorológico de esta pesca con la información disponible ahora.",
-                  action: () =>
-                    void fetch(
-                      `/api/fishing-trips/${encodeURIComponent(selectedTrip)}/weather-snapshot`,
-                      { method: "POST" },
-                    ).then(async (res) => {
+                  confirmLabel: "Sí, guardar",
+                  loadingLabel: "Guardando…",
+                  tone: "primary",
+                  action: async () => {
+                    setSaving(true);
+                    setError("");
+                    try {
+                      const res = await fetch(
+                        `/api/fishing-trips/${encodeURIComponent(selectedTrip)}/weather-snapshot`,
+                        { method: "POST" },
+                      );
                       const body = (await res.json()) as { error?: string };
                       if (!res.ok)
                         throw new Error(
@@ -390,7 +585,17 @@ export default function YucaFishApp() {
                       await load();
                       setConfirm(null);
                       setToast("Condiciones guardadas en la pesca");
-                    }),
+                      window.setTimeout(() => setToast(""), 3200);
+                    } catch (e) {
+                      setError(
+                        e instanceof Error
+                          ? e.message
+                          : "No pudimos guardar las condiciones.",
+                      );
+                    } finally {
+                      setSaving(false);
+                    }
+                  },
                 })
               }
               duplicate={() =>
@@ -492,6 +697,7 @@ export default function YucaFishApp() {
         <CatchForm
           config={catchForm}
           species={data.species}
+          requestCrop={requestCrop}
           saving={saving}
           close={() => setCatchForm(null)}
           save={async (payload, file) => {
@@ -534,6 +740,13 @@ export default function YucaFishApp() {
           saving={saving}
         />
       )}
+      {cropTask && (
+        <ImageCropModal
+          task={cropTask}
+          cancel={() => closeCropper(null)}
+          confirm={(file) => closeCropper(file)}
+        />
+      )}
       {toast && (
         <div className="toast" role="status">
           <ShieldCheck size={18} />
@@ -559,11 +772,11 @@ function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <div className={`brand ${compact ? "compact" : ""}`}>
       <span className="brand-mark">
-        <Fish size={25} />
+        <img src="/favicon.svg" alt="GoFishing.mx" />
       </span>
       {!compact && (
         <span>
-          <strong>YucaFish</strong>
+          <strong>GoFishing.mx</strong>
           <small>Bitácora de pesca</small>
         </span>
       )}
@@ -588,6 +801,7 @@ function Sidebar({
     ["dashboard", "Inicio", Home],
     ["history", "Mis pescas", History],
     ["weather", "Clima y mar", CloudSun],
+    ["closures", "Vedas", Anchor],
     ["stats", "Estadísticas", BarChart3],
     ["profile", "Mi perfil", UserRound],
   ];
@@ -665,12 +879,10 @@ function Topbar({
   profile,
   openMenu,
   navigate,
-  notify,
 }: {
   profile: Profile;
   openMenu: () => void;
   navigate: (v: View) => void;
-  notify: () => void;
 }) {
   return (
     <header className="topbar">
@@ -681,24 +893,22 @@ function Topbar({
       >
         <Menu />
       </button>
-      <div className="top-search">
-        <Search size={18} />
-        <input
-          aria-label="Buscar en YucaFish"
-          placeholder="Buscar pescas, puertos o especies"
-          onFocus={() => navigate("history")}
-          readOnly
-        />
-      </div>
       <button
-        className="icon-button"
-        aria-label="Notificaciones"
-        onClick={notify}
+        className="topbar-center-mark mobile-only"
+        onClick={() => navigate("dashboard")}
+        aria-label="Ir al inicio del portal"
       >
-        <Bell size={19} />
+        <img src="/favicon.svg" alt="GoFishing.mx" />
       </button>
+      <div className="topbar-spacer desktop-only" />
       <button className="user-chip" onClick={() => navigate("profile")}>
-        <span>{initials(profile.displayName)}</span>
+        <span>
+          {profile.avatarUrl ? (
+            <img src={profile.avatarUrl} alt={profile.displayName} />
+          ) : (
+            initials(profile.displayName)
+          )}
+        </span>
         <b>
           {profile.displayName || "Pescador"}
           <small>
@@ -734,7 +944,7 @@ function MobileNav({
         onClick={() => navigate("history")}
       >
         <History />
-        <span>Historial</span>
+        <span>Mis pescas</span>
       </button>
       <button className="new-fab" onClick={newTrip} aria-label="Nueva pesca">
         <Plus />
@@ -858,7 +1068,6 @@ function Dashboard({
         }
       />
       <PeriodTabs value={period} setValue={setPeriod} />
-      <WeatherTeaser ports={data.ports} open={openWeather} />
       {data.trips.length === 0 ? (
         <EmptyState newTrip={newTrip} />
       ) : (
@@ -996,7 +1205,46 @@ function WeatherTeaser({
       .catch(() => null);
     return () => controller.abort();
   }, [location]);
-  if (!location) return null;
+  if (!location)
+    return (
+      <button
+        className="card weather-teaser weather-teaser-loading"
+        onClick={open}
+        aria-label="Abrir clima y condiciones del mar"
+      >
+        <span className="weather-teaser-icon">
+          <CloudSun />
+        </span>
+        <span>
+          <small>CLIMA Y MAR</small>
+          <b>Consulta el clima de tu próxima pesca</b>
+          <em>Pronóstico marino, viento y oleaje desde puertos de Yucatán.</em>
+        </span>
+        <strong>
+          Ver clima <ChevronDown />
+        </strong>
+      </button>
+    );
+  if (!forecast)
+    return (
+      <button
+        className="card weather-teaser weather-teaser-loading"
+        onClick={open}
+        aria-label="Abrir clima y condiciones del mar"
+      >
+        <span className="weather-teaser-icon">
+          <CloudSun />
+        </span>
+        <span>
+          <small>CLIMA Y MAR · {location.name}</small>
+          <b>Consulta el pronóstico de tu próxima salida</b>
+          <em>Temperatura, viento y oleaje actualizándose…</em>
+        </span>
+        <strong>
+          Ver clima <ChevronDown />
+        </strong>
+      </button>
+    );
   const weather = forecast?.currentWeather;
   const marine = forecast?.currentMarine;
   return (
@@ -1011,15 +1259,10 @@ function WeatherTeaser({
       <span>
         <small>CLIMA Y MAR · {location.name}</small>
         <b>
-          {forecast
-            ? wmoCondition(weather?.weatherCode ?? null, weather?.isDay ?? true)
-                .label
-            : "Consultando condiciones…"}
+          {wmoCondition(weather?.weatherCode ?? null, weather?.isDay ?? true).label}
         </b>
         <em>
-          {forecast
-            ? `${metric(weather?.temperatureC, "°C")} · viento ${metric(weather?.windSpeedKmh, "km/h")} · olas ${metric(marine?.waveHeightMeters, "m")}`
-            : "Datos en tiempo real desde el servidor"}
+          {`${metric(weather?.temperatureC, "°C")} · viento ${metric(weather?.windSpeedKmh, "km/h")} · olas ${metric(marine?.waveHeightMeters, "m")}`}
         </em>
       </span>
       <strong>
@@ -1047,7 +1290,7 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
   const [selectedDate, setSelectedDate] = useState("");
   const [loading, setLoading] = useState(Boolean(initial));
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"selected" | "hours" | "days" | "charts">(
+  const [tab, setTab] = useState<"selected" | "hours" | "days">(
     "selected",
   );
   const [cooldown, setCooldown] = useState(false);
@@ -1151,6 +1394,27 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
       }) || [],
     [forecast, selectedDate],
   );
+  const selectedTideDay = forecast?.tides?.dailyConditions.find(
+    (day) => day.date === selectedDate,
+  );
+  const selectedExtremes =
+    forecast?.tides?.extremes.filter(
+      (item) =>
+        tideDateKey(item.localTime || item.time) === selectedDate,
+    ) || [];
+  const selectedTideSeries =
+    forecast?.tides?.timeSeries
+      .filter((item) => tideDateKey(item.time) === selectedDate)
+      .filter((_, index) => index % 8 === 0)
+      .slice(0, 12) || [];
+  const nextHigh =
+    forecast?.tides?.extremes.find(
+      (item) => item.type === "high" && new Date(item.time) > new Date(),
+    ) || null;
+  const nextLow =
+    forecast?.tides?.extremes.find(
+      (item) => item.type === "low" && new Date(item.time) > new Date(),
+    ) || null;
   const condition = weather
     ? wmoCondition(weather.weatherCode, weather.isDay ?? true)
     : null;
@@ -1350,6 +1614,51 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
                   )}
                 />
               </div>
+              {(forecast.tides || forecast.tideUnavailableReason) && (
+                <div className="tide-overview">
+                  {forecast.tides ? (
+                    <>
+                      <div>
+                        <small>PRÓXIMA PLEAMAR</small>
+                        <b>
+                          {nextHigh ? tideTimeLabel(nextHigh.localTime || nextHigh.time) : "No disponible"}
+                        </b>
+                        <span>{nextHigh ? metric(nextHigh.heightMeters, "m") : "Sin evento"}</span>
+                      </div>
+                      <div>
+                        <small>PRÓXIMA BAJAMAR</small>
+                        <b>
+                          {nextLow ? tideTimeLabel(nextLow.localTime || nextLow.time) : "No disponible"}
+                        </b>
+                        <span>{nextLow ? metric(nextLow.heightMeters, "m") : "Sin evento"}</span>
+                      </div>
+                      <div>
+                        <small>FASE LUNAR</small>
+                        <b>{forecast.tides.moonPhase || "No disponible"}</b>
+                        <span>
+                          {forecast.tides.moonIllumination == null
+                            ? "Sin iluminación"
+                            : `${forecast.tides.moonIllumination}% iluminada`}
+                        </span>
+                      </div>
+                      <div>
+                        <small>ACTIVIDAD SOLUNAR</small>
+                        <b>{selectedTideDay?.solunarLabel || "No disponible"}</b>
+                        <span>
+                          {selectedTideDay?.solunarRating == null
+                            ? "Sin calificación"
+                            : `${selectedTideDay.solunarRating}/4`}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="tide-unavailable-inline">
+                      <CircleHelp />
+                      <span>{forecast.tideUnavailableReason}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
             <div
               className="weather-tabs"
@@ -1374,12 +1683,6 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
               >
                 7 días
               </button>
-              <button
-                className={tab === "charts" ? "active" : ""}
-                onClick={() => setTab("charts")}
-              >
-                Gráficas
-              </button>
             </div>
             {tab === "selected" && selectedDaily && selectedOutlook && (
               <section className="selected-day-panel">
@@ -1393,38 +1696,6 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
                         {forecast.location.name}
                       </p>
                     </div>
-                    <div
-                      className={`condition-badge ${selectedOutlook.condition.level.toLowerCase()}`}
-                      aria-label={`Indicador: ${selectedOutlook.condition.label}`}
-                    >
-                      <ShieldCheck />
-                      {selectedOutlook.condition.label}
-                      <small>
-                        {selectedOutlook.condition.reasons.join(" · ") ||
-                          "Indicador orientativo"}
-                      </small>
-                    </div>
-                  </div>
-                  <div
-                    className="fishing-traffic-light"
-                    aria-label="Escala del indicador de pesca"
-                  >
-                    <span className="difficult">
-                      <i />
-                      Rojo <small>Complicado</small>
-                    </span>
-                    <span className="caution">
-                      <i />
-                      Amarillo <small>Precaución</small>
-                    </span>
-                    <span className="favorable">
-                      <i />
-                      Verde <small>Favorable</small>
-                    </span>
-                    <span className="ideal">
-                      <i />
-                      Azul <small>Ideal</small>
-                    </span>
                   </div>
                   <div className="selected-day-metrics">
                     <WeatherMetric
@@ -1514,23 +1785,83 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
                       value={timeOnly(selectedDaily.sunset)}
                     />
                   </div>
-                  <div className="best-fishing-hours">
-                    <div>
-                      <strong>Mejores horas estimadas</strong>
-                      <small>
-                        Entre las 05:00 y las 18:00, según el semáforo.
-                      </small>
+                  {forecast.tides && selectedTideDay ? (
+                    <div className="tide-solunar-grid">
+                      <article className="card tide-card">
+                        <div className="card-title">
+                          <div>
+                            <h3>Mareas del día</h3>
+                            <small>
+                              {forecast.tides.station.name} · {forecast.tides.datum}
+                            </small>
+                          </div>
+                        </div>
+                        <div className="tide-event-grid">
+                          {selectedExtremes.length ? (
+                            selectedExtremes.map((event) => (
+                              <div key={`${event.type}-${event.time}`}>
+                                <small>
+                                  {event.type === "high" ? "Pleamar" : "Bajamar"}
+                                </small>
+                                <b>{tideTimeLabel(event.localTime || event.time)}</b>
+                                <span>{metric(event.heightMeters, "m")}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <em>No hay eventos de marea disponibles para este día.</em>
+                          )}
+                        </div>
+                        <p className="tide-footnote">
+                          Estado mareal orientativo: {selectedTideDay.springNeap || forecast.tides.springNeap || "Sin dato"}.
+                        </p>
+                      </article>
+                      <article className="card tide-card">
+                        <div className="card-title">
+                          <div>
+                            <h3>Luna y ventanas solunares</h3>
+                            <small>
+                              {selectedTideDay.moonPhase || "Fase lunar no disponible"}
+                            </small>
+                          </div>
+                        </div>
+                        <div className="tide-event-grid solunar">
+                          <div>
+                            <small>Iluminación</small>
+                            <b>
+                              {selectedTideDay.moonIllumination == null
+                                ? "No disponible"
+                                : `${selectedTideDay.moonIllumination}%`}
+                            </b>
+                            <span>{selectedTideDay.springNeap || "Sin dato de marea"}</span>
+                          </div>
+                          <div>
+                            <small>Calificación</small>
+                            <b>{selectedTideDay.solunarLabel || "No disponible"}</b>
+                            <span>
+                              {selectedTideDay.solunarRating == null
+                                ? "Sin rating"
+                                : `${selectedTideDay.solunarRating}/4`}
+                            </span>
+                          </div>
+                          {(selectedTideDay.solunarPeriods || []).map((period, index) => (
+                            <div key={`${period.type}-${period.start}-${index}`}>
+                              <small>
+                                {period.type === "major" ? "Periodo mayor" : "Periodo menor"}
+                              </small>
+                              <b>
+                                {tideTimeLabel(period.startLocal || period.start)} -{" "}
+                                {tideTimeLabel(period.endLocal || period.end)}
+                              </b>
+                              <span>
+                                Pico {tideTimeLabel(period.peakLocal || period.peak)}
+                                {period.enhanced ? " · reforzado" : ""}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </article>
                     </div>
-                    <span>
-                      {selectedOutlook.bestHours.length ? (
-                        selectedOutlook.bestHours.map((time) => (
-                          <b key={time}>{hourLabel(time)}</b>
-                        ))
-                      ) : (
-                        <em>No se identificaron horas favorables.</em>
-                      )}
-                    </span>
-                  </div>
+                  ) : null}
                 </div>
                 <div
                   className="selected-day-hours"
@@ -1628,49 +1959,18 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
                 ))}
               </section>
             )}
-            {tab === "charts" && (
-              <section className="weather-chart-grid">
-                <WeatherChart
-                  title="Viento y ráfagas"
-                  unit="km/h"
-                  values={upcoming.map((item) => ({
-                    label: hourLabel(item.time),
-                    primary: item.weather?.windSpeedKmh ?? null,
-                    secondary: item.weather?.windGustKmh ?? null,
-                  }))}
-                />
-                <WeatherChart
-                  title="Altura y periodo del oleaje"
-                  unit="m"
-                  values={upcoming.map((item) => ({
-                    label: hourLabel(item.time),
-                    primary: item.marine?.waveHeightMeters ?? null,
-                    secondary: null,
-                  }))}
-                />
-                <WeatherChart
-                  title="Probabilidad de lluvia"
-                  unit="%"
-                  values={upcoming.map((item) => ({
-                    label: hourLabel(item.time),
-                    primary:
-                      item.weather?.precipitationProbabilityPercent ?? null,
-                    secondary: null,
-                  }))}
-                />
-              </section>
-            )}
             <div className="weather-safety">
               <ShieldCheck />
               <p>
                 <b>
                   Estos semáforos e indicadores son únicamente orientativos.
                 </b>{" "}
-                YucaFish no garantiza una pesca exitosa ni se responsabiliza por
-                decisiones de navegación, pesca o seguridad tomadas con esta
-                información. Las condiciones pueden cambiar rápidamente;
-                consulta siempre los avisos oficiales, la Capitanía de Puerto y
-                las autoridades correspondientes antes de salir.
+                GoFishing.mx no garantiza una pesca exitosa ni se
+                responsabiliza por decisiones de navegación, pesca o seguridad
+                tomadas con esta información. Las condiciones pueden cambiar
+                rápidamente; consulta siempre los avisos oficiales, la
+                Capitanía de Puerto y las autoridades correspondientes antes de
+                salir.
               </p>
             </div>
             <p className="weather-attribution">
@@ -1682,6 +1982,18 @@ function WeatherView({ ports }: { ports: CatalogItem[] }) {
               >
                 Open-Meteo
               </a>
+              {forecast.tides ? (
+                <>
+                  {" · "}Mareas y solunar:{" "}
+                  <a
+                    href="https://tidecheck.com/developers/docs"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    TideCheck
+                  </a>
+                </>
+              ) : null}
             </p>
           </>
         )
@@ -2001,7 +2313,9 @@ function TripCard({
   edit: () => void;
 }) {
   const list = tripCatches(trip.id, catches);
-  const photo = media.find((m) => m.tripId === trip.id);
+  const photo = trip.coverImageUrl
+    ? { url: trip.coverImageUrl, altText: trip.title }
+    : media.find((m) => m.tripId === trip.id && !m.catchId);
   return (
     <article className="card trip-card">
       <button
@@ -2105,6 +2419,7 @@ function TripDetail({
   addCatch,
   editCatch,
   editTrip,
+  uploadCover,
   captureWeather,
   duplicate,
   deleteTrip,
@@ -2117,6 +2432,7 @@ function TripDetail({
   addCatch: () => void;
   editCatch: (c: Catch) => void;
   editTrip: (t: Trip) => void;
+  uploadCover: (file: File) => Promise<void>;
   captureWeather: () => void;
   duplicate: () => void;
   deleteTrip: () => void;
@@ -2124,6 +2440,7 @@ function TripDetail({
   deletePhoto: (id: string) => void;
 }) {
   const trip = data.trips.find((t) => t.id === tripId);
+  const [uploadingCover, setUploadingCover] = useState(false);
   if (!trip)
     return <ErrorScreen message="No encontramos esta pesca." retry={back} />;
   const list = tripCatches(tripId, data.catches);
@@ -2152,23 +2469,38 @@ function TripDetail({
             <CloudSun size={17} />
             {snapshot ? "Actualizar clima" : "Guardar clima"}
           </button>
+          <label className="button secondary upload-cover-button">
+            <Camera size={17} />
+            {uploadingCover
+              ? "Subiendo…"
+              : trip.coverImageUrl
+                ? "Cambiar portada"
+                : "Subir portada"}
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                setUploadingCover(true);
+                void uploadCover(file).finally(() => {
+                  setUploadingCover(false);
+                  event.target.value = "";
+                });
+              }}
+            />
+          </label>
           <button className="button secondary" onClick={() => editTrip(trip)}>
             <Edit3 size={17} />
             Editar
           </button>
-          <button
-            className="icon-button"
-            onClick={duplicate}
-            aria-label="Duplicar pesca"
-          >
-            <MoreHorizontal />
+          <button className="button secondary" onClick={duplicate}>
+            <Copy size={17} />
+            Duplicar
           </button>
-          <button
-            className="icon-button danger"
-            onClick={deleteTrip}
-            aria-label="Eliminar pesca"
-          >
-            <Trash2 />
+          <button className="button secondary danger-button" onClick={deleteTrip}>
+            <Trash2 size={17} />
+            Eliminar
           </button>
         </div>
       </div>
@@ -2198,9 +2530,7 @@ function TripDetail({
           }
         />
       </div>
-      {snapshot && (
-        <WeatherSnapshotCard snapshot={snapshot} update={captureWeather} />
-      )}
+      <TripForecastSummary trip={trip} ports={data.ports} />
       <div className="detail-grid">
         <section className="card">
           <CardTitle
@@ -2287,15 +2617,22 @@ function WeatherSnapshotCard({
 }) {
   return (
     <section className="card snapshot-card">
-      <CardTitle
-        title="Condiciones guardadas"
-        subtitle={`${snapshot.snapshotType === "FORECAST" ? "Pronóstico" : snapshot.snapshotType === "CURRENT_CONDITION" ? "Condición consultada" : "Captura manual"} · ${formatWeatherTime(snapshot.capturedAt)}`}
-        action={
-          <button className="link-button" onClick={update}>
-            Actualizar
-          </button>
-        }
-      />
+      <div className="card-title snapshot-title">
+        <div>
+          <h2>Condiciones guardadas</h2>
+          <p>
+            {snapshot.snapshotType === "FORECAST"
+              ? "Pronóstico"
+              : snapshot.snapshotType === "CURRENT_CONDITION"
+                ? "Condición consultada"
+                : "Captura manual"}{" "}
+            · {formatWeatherTime(snapshot.capturedAt)}
+          </p>
+        </div>
+        <button className="link-button" onClick={update}>
+          Actualizar
+        </button>
+      </div>
       <div>
         <WeatherMetric
           icon={Thermometer}
@@ -2337,6 +2674,192 @@ function WeatherSnapshotCard({
         />
       </div>
       <p>Este snapshot no cambia cuando el pronóstico se actualiza.</p>
+    </section>
+  );
+}
+
+function TripForecastSummary({
+  trip,
+  ports,
+}: {
+  trip: Trip;
+  ports: CatalogItem[];
+}) {
+  const [state, setState] = useState<{
+    key: string;
+    forecast: PortForecast | null;
+    error: string;
+  }>({ key: "", forecast: null, error: "" });
+  const location = ports.find((port) => port.id === trip.departureLocationId);
+  const isFutureTrip = trip.fishingDate >= mxDate();
+  const canQueryForecast = Boolean(
+    location?.id && location.isWeatherEnabled && isFutureTrip,
+  );
+  const requestKey =
+    canQueryForecast && location?.id ? `${location.id}:${trip.fishingDate}` : "";
+
+  useEffect(() => {
+    if (!canQueryForecast || !location?.id) return;
+    const controller = new AbortController();
+    fetch(`/api/weather/locations/${encodeURIComponent(location.id)}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const body = (await response.json()) as PortForecast & {
+          error?: string;
+        };
+        if (!response.ok)
+          throw new Error(body.error || "No pudimos consultar el clima.");
+        if (!controller.signal.aborted)
+          setState({ key: requestKey, forecast: body, error: "" });
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted)
+          setState({
+            key: requestKey,
+            forecast: null,
+            error:
+              reason instanceof Error
+                ? reason.message
+                : "No pudimos consultar el clima.",
+          });
+      });
+    return () => controller.abort();
+  }, [canQueryForecast, location?.id, requestKey]);
+
+  const activeForecast =
+    canQueryForecast && state.key === requestKey ? state.forecast : null;
+  const activeError =
+    canQueryForecast && state.key === requestKey ? state.error : "";
+  const loading = canQueryForecast && !activeForecast && !activeError;
+  const selectedDaily = activeForecast?.daily.find(
+    (day) => day.date === trip.fishingDate,
+  );
+  const selectedOutlook = activeForecast?.dailyFishingOutlooks.find(
+    (day) => day.date === trip.fishingDate,
+  );
+
+  if (!location?.isWeatherEnabled || !isFutureTrip)
+    return (
+      <section className="card trip-forecast-card trip-forecast-empty">
+        <CardTitle
+          title="Clima estimado para tu salida"
+          subtitle="Consulta previa de la fecha elegida"
+        />
+        <p>
+          {trip.fishingDate < mxDate()
+            ? "Esta salida ya ocurrió. Si quieres conservar una referencia, puedes guardar un snapshot meteorológico."
+            : "Este puerto todavía no tiene clima disponible para mostrar una estimación."}
+        </p>
+      </section>
+    );
+
+  if (loading && !activeForecast)
+    return (
+      <section className="card trip-forecast-card trip-forecast-empty">
+        <CardTitle
+          title="Clima estimado para tu salida"
+          subtitle={`Consultando ${location.name}`}
+        />
+        <p>Estamos revisando el pronóstico más cercano para tu fecha de pesca.</p>
+      </section>
+    );
+
+  if (activeError)
+    return (
+      <section className="card trip-forecast-card trip-forecast-empty">
+        <CardTitle
+          title="Clima estimado para tu salida"
+          subtitle={`Consulta para ${location.name}`}
+        />
+        <p>{activeError}</p>
+      </section>
+    );
+
+  if (!selectedDaily || !selectedOutlook)
+    return (
+      <section className="card trip-forecast-card trip-forecast-empty">
+        <CardTitle
+          title="Clima estimado para tu salida"
+          subtitle={formatDate(trip.fishingDate, true)}
+        />
+        <p>
+          Días cercanos a la pesca podrás consultar el clima de tu día de
+          pesca. Cuando el proveedor tenga ese rango disponible, aparecerá aquí
+          un resumen orientativo.
+        </p>
+      </section>
+    );
+
+  return (
+    <section className="card trip-forecast-card">
+      <CardTitle
+        title="Clima estimado para tu salida"
+        subtitle={`${formatDate(trip.fishingDate, true)} · ${location.name}`}
+      />
+      <div className="trip-forecast-top">
+        <div>
+          <small>INDICADOR ORIENTATIVO</small>
+          <h2>{selectedOutlook.condition.label}</h2>
+          <p>
+            {wmoCondition(selectedDaily.weatherCode).label} · amanecer{" "}
+            {timeOnly(selectedDaily.sunrise)} · atardecer{" "}
+            {timeOnly(selectedDaily.sunset)}
+          </p>
+        </div>
+        <div
+          className={`condition-badge ${selectedOutlook.condition.level.toLowerCase()}`}
+        >
+          <ShieldCheck />
+          {selectedOutlook.condition.label}
+          <small>
+            {selectedOutlook.condition.reasons.join(" · ") ||
+              "Indicador orientativo"}
+          </small>
+        </div>
+      </div>
+      <div className="selected-day-metrics trip-forecast-metrics">
+        <WeatherMetric
+          icon={Thermometer}
+          label="Temperatura"
+          value={`${metric(selectedDaily.temperatureMinC, "°C")} – ${metric(selectedDaily.temperatureMaxC, "°C")}`}
+        />
+        <WeatherMetric
+          icon={CloudRain}
+          label="Lluvia"
+          value={metric(selectedDaily.precipitationProbabilityMaxPercent, "%")}
+        />
+        <WeatherMetric
+          icon={Wind}
+          label="Viento"
+          value={directionMetric(
+            selectedDaily.windSpeedMaxKmh,
+            selectedDaily.windDirectionDominantDegrees,
+            "km/h",
+          )}
+        />
+        <WeatherMetric
+          icon={Wind}
+          label="Ráfaga"
+          value={metric(selectedDaily.windGustMaxKmh, "km/h")}
+        />
+        <WeatherMetric
+          icon={Waves}
+          label="Oleaje"
+          value={metric(selectedOutlook.waveHeightMaxMeters, "m")}
+        />
+        <WeatherMetric
+          icon={Gauge}
+          label="Periodo"
+          value={metric(selectedOutlook.wavePeriodMinSeconds, "s")}
+        />
+      </div>
+      <div className="trip-forecast-note">
+        Estos indicadores son informativos y pueden cambiar. GoFishing.mx no se
+        responsabiliza por los resultados de pesca ni por decisiones de
+        navegación o seguridad.
+      </div>
     </section>
   );
 }
@@ -2429,6 +2952,122 @@ function Info({
   );
 }
 
+function ClosuresView() {
+  const seasons = [
+    {
+      species: "Mero",
+      closure: "Del 1 de febrero al 31 de marzo",
+      fishing: "Del 1 de abril al 31 de enero",
+      tone: "emerald",
+      icon: Fish,
+    },
+    {
+      species: "Pulpo",
+      closure: "Del 16 de diciembre al 31 de julio",
+      fishing: "Del 1 de agosto al 15 de diciembre",
+      tone: "violet",
+      icon: Waves,
+    },
+    {
+      species: "Langosta",
+      closure: "Del 1 de marzo al 30 de junio",
+      fishing: "Del 1 de julio al 28 de febrero",
+      tone: "rose",
+      icon: Anchor,
+    },
+    {
+      species: "Tiburón",
+      closure: "Del 15 de mayo al 15 de junio y del 1 al 29 de agosto",
+      fishing: "Del 30 de agosto al 14 de mayo y del 16 de junio al 31 de julio",
+      tone: "navy",
+      icon: ShieldCheck,
+    },
+  ] as const;
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="Consulta informativa"
+        title="Vedas"
+        subtitle="Calendario orientativo de vedas aplicables en Yucatán para revisar antes de planear una salida."
+      />
+      <section className="card closures-card">
+        <div className="closures-list">
+          {seasons.map((item) => {
+            const Icon = item.icon;
+            return (
+              <article key={item.species} className={`closure-item ${item.tone}`}>
+                <span>
+                  <Icon />
+                </span>
+                <div>
+                  <h2>{item.species}</h2>
+                  <p>
+                    La temporada de <b>veda</b> comprende <strong>{item.closure}</strong>.
+                  </p>
+                  <p>
+                    La temporada de <b>captura</b> comprende{" "}
+                    <strong>{item.fishing}</strong>.
+                  </p>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+        <div className="closures-note">
+          <ShieldCheck />
+          <p>
+            Este módulo es informativo. Verifica siempre avisos vigentes de
+            CONAPESCA, DOF y Capitanía de Puerto antes de pescar.
+          </p>
+        </div>
+        <p className="closures-sources">
+          Fuentes oficiales:{" "}
+          <a
+            href="https://www.dof.gob.mx/nota_detalle_popup.php?codigo=5751372"
+            target="_blank"
+            rel="noreferrer"
+          >
+            DOF acuerdo de vedas
+          </a>
+          {" · "}
+          <a
+            href="https://www.gob.mx/conapesca/articulos/inicia-la-veda-de-todas-las-especies-de-mero-en-el-golfo-de-mexico-233773"
+            target="_blank"
+            rel="noreferrer"
+          >
+            CONAPESCA mero
+          </a>
+          {" · "}
+          <a
+            href="https://www.dof.gob.mx/nota_detalle_popup.php?codigo=5659177"
+            target="_blank"
+            rel="noreferrer"
+          >
+            DOF pulpo
+          </a>
+          {" · "}
+          <a
+            href="https://www.dof.gob.mx/nota_detalle_popup.php?codigo=5336757"
+            target="_blank"
+            rel="noreferrer"
+          >
+            DOF langosta
+          </a>
+          {" · "}
+          <a
+            href="https://www.gob.mx/conapesca/prensa/inicia-veda-de-tiburon-y-raya-a-partir-del-1-de-mayo-271220?idiom=es-MX"
+            target="_blank"
+            rel="noreferrer"
+          >
+            CONAPESCA tiburón
+          </a>
+        </p>
+      </section>
+    </>
+  );
+}
+
 function StatsView({
   data,
   period,
@@ -2509,7 +3148,7 @@ function StatsView({
             ))}
           </div>
         </div>
-        <div className="card">
+        <div className="card chart-card stats-side-card">
           <CardTitle
             title="Puertos frecuentes"
             subtitle="Tus puntos de salida favoritos"
@@ -2528,7 +3167,7 @@ function StatsView({
           </div>
         </div>
       </div>
-      <div className="card">
+      <div className="card chart-card stats-chart-card">
         <CardTitle
           title="Capturas por mes"
           subtitle="Resumen visual de actividad"
@@ -2541,14 +3180,17 @@ function StatsView({
 
 function ProfileView({
   data,
+  requestCrop,
   save,
   saving,
 }: {
   data: AppData;
+  requestCrop: (task: CropTask) => Promise<File | null>;
   save: (p: Record<string, string>) => Promise<void>;
   saving: boolean;
 }) {
-  const [form, setForm] = useState(data.profile);
+  const [form, setForm] = useState({ ...data.profile, newEmail: "" });
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const update = (key: keyof Profile, value: string) =>
     setForm({ ...form, [key]: value });
   return (
@@ -2566,19 +3208,96 @@ function ProfileView({
         }}
       >
         <div className="card profile-card">
-          <div className="profile-avatar">{initials(form.displayName)}</div>
+          <div className="profile-avatar">
+            {form.avatarUrl ? (
+              <img
+                src={String(form.avatarUrl)}
+                alt={form.displayName}
+                style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }}
+              />
+            ) : (
+              initials(form.displayName)
+            )}
+          </div>
           <h2>{form.displayName}</h2>
           <p>{form.email}</p>
           <span className="verified">
             <ShieldCheck size={15} />
             Cuenta verificada
           </span>
+          <label className="button secondary small" style={{ margin: "10px auto 0", position: "relative", overflow: "hidden" }}>
+            <Camera size={15} />
+            {uploadingAvatar ? "Subiendo foto…" : "Subir foto de perfil"}
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={uploadingAvatar}
+              style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                const cropped = await requestCrop({
+                  file,
+                  title: "Recortar foto de perfil",
+                  aspect: 1,
+                  outputWidth: 800,
+                  outputHeight: 800,
+                  round: true,
+                });
+                if (!cropped) {
+                  event.target.value = "";
+                  return;
+                }
+                setUploadingAvatar(true);
+                try {
+                  const body = new FormData();
+                  body.set("file", cropped);
+                  body.set("kind", "avatar");
+                  const response = await fetch("/api/media", {
+                    method: "POST",
+                    body,
+                  });
+                  const payload = (await response.json()) as {
+                    error?: string;
+                    url?: string;
+                  };
+                  if (!response.ok || !payload.url)
+                    throw new Error(
+                      payload.error || "No pudimos subir la foto de perfil.",
+                    );
+                  const nextForm = {
+                    ...form,
+                    avatarUrl: payload.url,
+                  };
+                  setForm((current) => ({
+                    ...current,
+                    avatarUrl: payload.url,
+                  }));
+                  await save(nextForm as unknown as Record<string, string>);
+                } catch (error) {
+                  alert(
+                    error instanceof Error
+                      ? error.message
+                      : "No pudimos subir la foto de perfil.",
+                  );
+                } finally {
+                  setUploadingAvatar(false);
+                }
+                event.target.value = "";
+              }}
+            />
+          </label>
           <hr />
-          <p className="privacy-note">
-            <ShieldCheck />
-            Tus pescas y fotografías son privadas. Solo tú puedes acceder a
-            ellas.
-          </p>
+          <div className="public-link-card">
+            <small>Tu perfil público</small>
+            <a
+              href={`/u/${form.publicSlug || ""}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {`gofishing.mx/u/${form.publicSlug || "tu-slug"}`}
+            </a>
+          </div>
         </div>
         <div className="card form-card">
           <CardTitle title="Información personal" />
@@ -2595,9 +3314,24 @@ function ProfileView({
               set={(v) => update("lastName", v)}
             />
             <Field
-              label="Nombre visible"
+              label="Nombre visible (Nombre público)"
               value={form.displayName}
               set={(v) => update("displayName", v)}
+              required
+              wide
+            />
+            <Field
+              label="Nuevo correo"
+              value={String(form.newEmail || "")}
+              set={(v) => update("newEmail", v)}
+              type="email"
+              placeholder="nuevo@correo.com"
+              wide
+            />
+            <Field
+              label="Link público"
+              value={form.publicSlug || ""}
+              set={(v) => update("publicSlug", slugInput(v))}
               required
               wide
             />
@@ -2637,6 +3371,28 @@ function ProfileView({
                 <option value="lb">Libras (lb)</option>
               </select>
             </label>
+            <label className="share-switch wide">
+              <div>
+                <b>Perfil público</b>
+                <small>
+                  Si lo activas, otros podrán ver tu ficha pública en
+                  {" "}gofishing.mx/u/{form.publicSlug || "tu-slug"}.
+                </small>
+              </div>
+              <button
+                type="button"
+                className={`toggle-switch ${form.publicProfileEnabled ? "on" : ""}`}
+                aria-pressed={Boolean(form.publicProfileEnabled)}
+                onClick={() =>
+                  setForm({
+                    ...form,
+                    publicProfileEnabled: !Boolean(form.publicProfileEnabled),
+                  })
+                }
+              >
+                <span />
+              </button>
+            </label>
           </div>
           <div className="form-footer">
             <PrimaryButton type="submit" disabled={saving}>
@@ -2653,7 +3409,7 @@ function ProfileView({
             <b>Acceso protegido</b>
             <p>
               Tu identidad se verifica mediante inicio de sesión seguro.
-              YucaFish nunca almacena tu contraseña.
+              GoFishing.mx nunca almacena tu contraseña.
             </p>
           </div>
           <a className="button secondary" href="/cerrar-sesion">
@@ -2677,6 +3433,10 @@ function AdminView({
   const [tab, setTab] = useState<
     "overview" | "species" | "ports" | "weather" | "audit"
   >("overview");
+  const [overviewList, setOverviewList] = useState<
+    "users" | "trips" | "catches" | "media"
+  >("users");
+  const [selectedAdminUser, setSelectedAdminUser] = useState<Record<string, unknown> | null>(null);
   const [name, setName] = useState("");
   if (data.profile.role !== "ADMIN")
     return (
@@ -2690,7 +3450,7 @@ function AdminView({
       <PageHeader
         eyebrow="Panel protegido"
         title="Administración"
-        subtitle="Gestiona catálogos y revisa la salud general de YucaFish."
+        subtitle="Gestiona catálogos y revisa la salud general de GoFishing.mx."
       />
       <div className="admin-tabs">
         {[
@@ -2712,30 +3472,10 @@ function AdminView({
       {tab === "overview" && (
         <>
           <div className="stat-grid">
-            <Stat
-              icon={UserRound}
-              label="Usuarios"
-              value="1"
-              trend="1 verificado"
-            />
-            <Stat
-              icon={Ship}
-              label="Pescas"
-              value={String(data.trips.length)}
-              trend="Registros activos"
-            />
-            <Stat
-              icon={Fish}
-              label="Capturas"
-              value={String(data.catches.length)}
-              trend="En la plataforma"
-            />
-            <Stat
-              icon={ImageIcon}
-              label="Fotografías"
-              value={String(data.media.length)}
-              trend="Almacenamiento privado"
-            />
+            <button className={`card stat-card admin-select ${overviewList === "users" ? "selected" : ""}`} onClick={() => setOverviewList("users")}><span className="stat-icon"><UserRound /></span><div><p>Usuarios</p><strong>{data.adminUsers.length}</strong><small>{data.adminUsers.filter((item) => String(item.status) === "ACTIVE").length} activos</small></div></button>
+            <button className={`card stat-card admin-select ${overviewList === "trips" ? "selected" : ""}`} onClick={() => setOverviewList("trips")}><span className="stat-icon"><Ship /></span><div><p>Pescas</p><strong>{data.adminTrips.length}</strong><small>Registros activos</small></div></button>
+            <button className={`card stat-card admin-select ${overviewList === "catches" ? "selected" : ""}`} onClick={() => setOverviewList("catches")}><span className="stat-icon"><Fish /></span><div><p>Capturas</p><strong>{data.adminCatches.length}</strong><small>En la plataforma</small></div></button>
+            <button className={`card stat-card admin-select ${overviewList === "media" ? "selected" : ""}`} onClick={() => setOverviewList("media")}><span className="stat-icon"><ImageIcon /></span><div><p>Fotografías</p><strong>{data.adminMedia.length}</strong><small>Almacenamiento privado</small></div></button>
           </div>
           <div className="card admin-welcome">
             <span>
@@ -2749,7 +3489,137 @@ function AdminView({
               </p>
             </div>
           </div>
+          <div className="card admin-table">
+            <CardTitle
+              title={
+                overviewList === "users"
+                  ? "Usuarios registrados"
+                  : overviewList === "trips"
+                    ? "Listado de pescas"
+                    : overviewList === "catches"
+                      ? "Listado de capturas"
+                      : "Listado de fotografías"
+              }
+              subtitle="Desde aquí puedes revisar y moderar contenido o cuentas de la comunidad."
+            />
+            <div className="table-wrap">
+              {overviewList === "users" && (
+                <table>
+                  <thead><tr><th>Usuario</th><th>Correo</th><th>Estado</th><th>Perfil público</th><th>Acciones</th></tr></thead>
+                  <tbody>
+                    {data.adminUsers.map((item) => (
+                      <tr key={String(item.email)}>
+                        <td>{String(item.displayName || item.firstName || item.email)}</td>
+                        <td>{String(item.email)}</td>
+                        <td>{String(item.status || "ACTIVE")}</td>
+                        <td>{item.publicProfileEnabled ? "Activo" : "Oculto"}</td>
+                        <td>
+                          <div className="trip-actions">
+                            <button
+                              className="button secondary small"
+                              onClick={() => {
+                                const reason = window.prompt(
+                                  String(item.status) === "ACTIVE"
+                                    ? "Motivo para deshabilitar esta cuenta:"
+                                    : "Motivo para reactivar esta cuenta:",
+                                  "",
+                                );
+                                if (reason === null) return;
+                                void mutate(
+                                  {
+                                    op: "adminSetUserStatus",
+                                    email: item.email,
+                                    status: String(item.status) === "ACTIVE" ? "DISABLED" : "ACTIVE",
+                                    reason,
+                                  },
+                                  String(item.status) === "ACTIVE" ? "Cuenta deshabilitada" : "Cuenta reactivada",
+                                );
+                              }}
+                            >
+                              {String(item.status) === "ACTIVE" ? "Deshabilitar" : "Reactivar"}
+                            </button>
+                            <button
+                              className="button secondary small"
+                              onClick={() => setSelectedAdminUser(item)}
+                            >
+                              Ver perfil
+                            </button>
+                            {item.publicSlug ? (
+                              <a
+                                className="button secondary small"
+                                href={`/u/${item.publicSlug || ""}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                aria-label={`Ver perfil público de ${String(item.displayName || item.firstName || item.email)}`}
+                              >
+                                <Eye size={15} />
+                              </a>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {overviewList === "trips" && (
+                <table>
+                  <thead><tr><th>Pesca</th><th>Dueño</th><th>Puerto</th><th>Estado</th><th>Comunidad</th><th>Acción</th></tr></thead>
+                  <tbody>
+                    {data.adminTrips.map((item) => (
+                      <tr key={String(item.id)}>
+                        <td>{String(item.title)}</td>
+                        <td>{String(item.ownerEmail)}</td>
+                        <td>{String(item.port)}</td>
+                        <td>{String(item.status)}</td>
+                        <td>{item.publicShare ? "Compartida" : "Privada"}</td>
+                        <td><button className="button secondary small" onClick={() => { const reason = window.prompt("Motivo para retirar esta pesca:", ""); if (reason === null) return; void mutate({ op: "adminDeleteTrip", id: item.id, reason }, "Pesca retirada"); }}>Retirar pesca</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {overviewList === "catches" && (
+                <table>
+                  <thead><tr><th>Captura</th><th>Dueño</th><th>Pesca</th><th>Peso</th><th>Acción</th></tr></thead>
+                  <tbody>
+                    {data.adminCatches.map((item) => (
+                      <tr key={String(item.id)}>
+                        <td>{String(item.species)}</td>
+                        <td>{String(item.ownerEmail)}</td>
+                        <td>{String(item.tripId)}</td>
+                        <td>{weightLabel(Number(item.weightKg || 0), "kg")}</td>
+                        <td><button className="button secondary small" onClick={() => void mutate({ op: "adminDeleteCatch", id: item.id }, "Captura eliminada")}>Eliminar</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {overviewList === "media" && (
+                <table>
+                  <thead><tr><th>Archivo</th><th>Dueño</th><th>Pesca</th><th>Tipo</th><th>Acción</th></tr></thead>
+                  <tbody>
+                    {data.adminMedia.map((item) => (
+                      <tr key={String(item.id)}>
+                        <td>{String(item.altText || item.id)}</td>
+                        <td>{String(item.ownerEmail)}</td>
+                        <td>{String(item.tripId || "—")}</td>
+                        <td>{String(item.mimeType || "imagen")}</td>
+                        <td><button className="button secondary small" onClick={() => void mutate({ op: "adminDeleteMedia", id: item.id }, "Fotografía eliminada")}>Eliminar</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
         </>
+      )}
+      {selectedAdminUser && (
+        <AdminUserDetailModal
+          user={selectedAdminUser}
+          close={() => setSelectedAdminUser(null)}
+        />
       )}
       {(tab === "species" || tab === "ports") && (
         <div className="card admin-table">
@@ -2879,6 +3749,70 @@ function AdminView({
   );
 }
 
+function AdminUserDetailModal({
+  user,
+  close,
+}: {
+  user: Record<string, unknown>;
+  close: () => void;
+}) {
+  const entries: Array<[string, unknown]> = [
+    ["Nombre visible", user.displayName],
+    ["Nombre", user.firstName],
+    ["Apellidos", user.lastName],
+    ["Correo", user.email],
+    ["Estado de cuenta", user.status],
+    ["Rol", user.role],
+    ["Perfil público", user.publicProfileEnabled ? "Activo" : "Oculto"],
+    [
+      "Link público",
+      user.publicSlug ? `/u/${String(user.publicSlug)}` : "No configurado",
+    ],
+    ["Ciudad", user.city],
+    ["Estado", user.state],
+    ["País", user.country],
+    ["Zona horaria", user.timezone],
+    ["Unidad de peso", user.weightUnit],
+    ["Avatar", user.avatarUrl ? "Configurado" : "Sin foto"],
+    ["Creado", user.createdAt],
+    ["Actualizado", user.updatedAt],
+  ];
+  return (
+    <div
+      className="modal-layer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="admin-user-detail-title"
+    >
+      <div className="sheet wide-sheet">
+        <div className="sheet-head">
+          <div>
+            <span className="eyebrow">PERFIL INTERNO</span>
+            <h2 id="admin-user-detail-title">
+              {String(user.displayName || user.firstName || user.email || "Usuario")}
+            </h2>
+            <p>
+              Vista interna del perfil capturado por el usuario. La contraseña
+              nunca se muestra aquí.
+            </p>
+          </div>
+          <button className="icon-button" onClick={close} aria-label="Cerrar">
+            <X />
+          </button>
+        </div>
+        <div className="form-grid" style={{ padding: "0 22px 22px" }}>
+          {entries.map(([label, value]) => (
+            <label key={label}>
+              <span className="field-label">{label}</span>
+              <input value={String(value || "Sin especificar")} readOnly />
+            </label>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WeatherAdmin({
   data,
   mutate,
@@ -2910,6 +3844,17 @@ function WeatherAdmin({
   };
   const [rules, setRules] = useState(defaults);
   const [testStatus, setTestStatus] = useState("");
+  const [stations, setStations] = useState<
+    Array<{
+      id: string;
+      name: string;
+      region: string | null;
+      country: string | null;
+      distanceKm: number | null;
+    }>
+  >([]);
+  const [stationsLoading, setStationsLoading] = useState(false);
+  const [stationsError, setStationsError] = useState("");
   const updatePort = (key: keyof typeof portForm, value: string | boolean) =>
     setPortForm({ ...portForm, [key]: value });
   const updateRule = (key: keyof WeatherSettings, value: string) =>
@@ -2924,6 +3869,35 @@ function WeatherAdmin({
         ? "Proveedor disponible y respuesta válida."
         : `La prueba falló (${response.status}).`,
     );
+  };
+  const loadStations = async () => {
+    if (!portId) return;
+    setStationsLoading(true);
+    setStationsError("");
+    try {
+      const response = await fetch(
+        `/api/weather/locations/${encodeURIComponent(portId)}/stations`,
+        { cache: "no-store" },
+      );
+      const body = (await response.json()) as {
+        items?: Array<{
+          id: string;
+          name: string;
+          region: string | null;
+          country: string | null;
+          distanceKm: number | null;
+        }>;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(body.error || "No pudimos buscar estaciones.");
+      setStations(body.items || []);
+    } catch (error) {
+      setStationsError(
+        error instanceof Error ? error.message : "No pudimos buscar estaciones.",
+      );
+    } finally {
+      setStationsLoading(false);
+    }
   };
   return (
     <div className="weather-admin">
@@ -3050,6 +4024,77 @@ function WeatherAdmin({
               {testStatus}
             </p>
           )}
+          <div className="admin-tide-stations">
+            <div className="card-title">
+              <div>
+                <h3>Estación de mareas</h3>
+                <small>
+                  Usa solo estaciones verificadas por el servidor para Yucatán.
+                </small>
+              </div>
+            </div>
+            <div className="admin-tide-current">
+              <small>Actual</small>
+              <b>
+                {configured.find((port) => port.id === portId)?.tideCheckStationName ||
+                  "Sin estación asignada"}
+              </b>
+              <span>
+                {configured.find((port) => port.id === portId)?.stationVerifiedAt
+                  ? `Verificada ${formatWeatherTime(String(configured.find((port) => port.id === portId)?.stationVerifiedAt))}`
+                  : "Pendiente de verificación"}
+              </span>
+            </div>
+            <div className="form-footer">
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => void loadStations()}
+              >
+                {stationsLoading ? "Buscando…" : "Buscar estaciones cercanas"}
+              </button>
+              <button
+                type="button"
+                className="button ghost"
+                onClick={() =>
+                  void mutate(
+                    { op: "clearTideStation", id: portId },
+                    "Estación de mareas eliminada",
+                  )
+                }
+              >
+                Quitar estación
+              </button>
+            </div>
+            {stationsError && <p className="test-status">{stationsError}</p>}
+            {!!stations.length && (
+              <div className="admin-tide-list">
+                {stations.map((station) => (
+                  <button
+                    type="button"
+                    key={station.id}
+                    className="admin-tide-item"
+                    onClick={() =>
+                      void mutate(
+                        { op: "assignTideStation", id: portId, stationId: station.id },
+                        "Estación de mareas verificada",
+                      )
+                    }
+                  >
+                    <b>{station.name}</b>
+                    <span>
+                      {station.region || "Sin región"} · {station.country || "Sin país"}
+                    </span>
+                    <small>
+                      {station.distanceKm == null
+                        ? "Distancia no disponible"
+                        : `${station.distanceKm.toFixed(1)} km`}
+                    </small>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </form>
         <form
           className="card form-card"
@@ -3165,6 +4210,7 @@ function TripForm({
     captain: item.captain || "",
     notes: item.notes || "",
     status: item.status || "DRAFT",
+    publicShare: Boolean(item.publicShare),
   });
   const [customPort, setCustomPort] = useState("");
   const [captureWeather, setCaptureWeather] = useState(!item.id);
@@ -3193,12 +4239,12 @@ function TripForm({
   );
   return (
     <div
-      className="modal-layer"
+      className="modal-layer mobile-form-layer"
       role="dialog"
       aria-modal="true"
       aria-labelledby="trip-form-title"
     >
-      <div className="sheet wide-sheet">
+      <div className="sheet wide-sheet mobile-form-sheet">
         <div className="sheet-head">
           <div>
             <span className="eyebrow">PASO 1 DE 2 · INFORMACIÓN</span>
@@ -3235,7 +4281,9 @@ function TripForm({
               wide
             />
             <label>
-              Marina o puerto <em>*</em>
+              <span className="field-label">
+                Marina o puerto <em>*</em>
+              </span>
               <select
                 value={form.port}
                 onChange={(event) => update("port", event.target.value)}
@@ -3333,6 +4381,28 @@ function TripForm({
                 </span>
               </label>
             )}
+            <label className="share-switch wide">
+              <div>
+                <b>Compartir a comunidad</b>
+                <small>
+                  Si la finalizas y activas esta opción, podrá verse en tu
+                  perfil público y en la sección Comunidad.
+                </small>
+              </div>
+              <button
+                type="button"
+                className={`toggle-switch ${form.publicShare ? "on" : ""}`}
+                aria-pressed={Boolean(form.publicShare)}
+                onClick={() =>
+                  setForm((current) => ({
+                    ...current,
+                    publicShare: !current.publicShare,
+                  }))
+                }
+              >
+                <span />
+              </button>
+            </label>
           </div>
           <div className="sheet-footer">
             <button className="button secondary" type="button" onClick={close}>
@@ -3363,12 +4433,14 @@ function TripForm({
 function CatchForm({
   config,
   species,
+  requestCrop,
   save,
   close,
   saving,
 }: {
   config: { tripId: string; item?: Catch };
   species: CatalogItem[];
+  requestCrop: (task: CropTask) => Promise<File | null>;
   save: (p: Record<string, unknown>, file: File | null) => Promise<void>;
   close: () => void;
   saving: boolean;
@@ -3406,12 +4478,12 @@ function CatchForm({
       ];
   return (
     <div
-      className="modal-layer"
+      className="modal-layer mobile-form-layer"
       role="dialog"
       aria-modal="true"
       aria-labelledby="catch-form-title"
     >
-      <div className="sheet catch-sheet">
+      <div className="sheet catch-sheet mobile-form-sheet">
         <div className="sheet-head">
           <div>
             <span className="eyebrow">PASO 2 DE 2 · CAPTURA</span>
@@ -3537,7 +4609,19 @@ function CatchForm({
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                onChange={async (e) => {
+                  const image = e.target.files?.[0];
+                  if (!image) return;
+                  const cropped = await requestCrop({
+                    file: image,
+                    title: "Recortar foto de captura",
+                    aspect: 1,
+                    outputWidth: 1200,
+                    outputHeight: 1200,
+                  });
+                  setFile(cropped);
+                  e.target.value = "";
+                }}
               />
             </label>
           </div>
@@ -3562,6 +4646,172 @@ function CatchForm({
   );
 }
 
+function ImageCropModal({
+  task,
+  cancel,
+  confirm,
+}: {
+  task: CropTask;
+  cancel: () => void;
+  confirm: (file: File) => void;
+}) {
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [dimensions, setDimensions] = useState({ width: 1, height: 1 });
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const dragState = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
+  const cropWidth = 1000;
+  const cropHeight = cropWidth / task.aspect;
+  const baseScale = useMemo(
+    () => Math.max(cropWidth / dimensions.width, cropHeight / dimensions.height),
+    [cropHeight, dimensions.height, dimensions.width],
+  );
+  const displayWidth = dimensions.width * baseScale * zoom;
+  const displayHeight = dimensions.height * baseScale * zoom;
+  const maxOffsetX = Math.max(0, (displayWidth - cropWidth) / 2);
+  const maxOffsetY = Math.max(0, (displayHeight - cropHeight) / 2);
+  const normalizedOffset = {
+    x: clamp(offset.x, -maxOffsetX, maxOffsetX),
+    y: clamp(offset.y, -maxOffsetY, maxOffsetY),
+  };
+
+  useEffect(() => {
+    const url = URL.createObjectURL(task.file);
+    setPreviewUrl(url);
+    const image = new Image();
+    image.onload = () => {
+      setDimensions({
+        width: image.naturalWidth || 1,
+        height: image.naturalHeight || 1,
+      });
+      setZoom(1);
+      setOffset({ x: 0, y: 0 });
+    };
+    image.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [task.file]);
+
+  useEffect(() => {
+    setOffset((current) => ({
+      x: clamp(current.x, -maxOffsetX, maxOffsetX),
+      y: clamp(current.y, -maxOffsetY, maxOffsetY),
+    }));
+  }, [maxOffsetX, maxOffsetY]);
+
+  return (
+    <div
+      className="modal-layer cropper-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="crop-title"
+    >
+      <div className="sheet cropper-sheet">
+        <div className="sheet-head">
+          <div>
+            <span className="eyebrow">AJUSTA TU IMAGEN</span>
+            <h2 id="crop-title">{task.title}</h2>
+            <p>Mueve y acerca la imagen hasta que el encuadre quede como quieres.</p>
+          </div>
+          <button className="icon-button" onClick={cancel} aria-label="Cerrar">
+            <X />
+          </button>
+        </div>
+        <div className="cropper-layout">
+          <div
+            className={`cropper-stage ${task.round ? "round" : ""}`}
+            style={{ aspectRatio: `${task.aspect}` }}
+            onPointerDown={(event) => {
+              (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
+              dragState.current = {
+                x: event.clientX,
+                y: event.clientY,
+                startX: normalizedOffset.x,
+                startY: normalizedOffset.y,
+              };
+            }}
+            onPointerMove={(event) => {
+              if (!dragState.current) return;
+              setOffset({
+                x: clamp(
+                  dragState.current.startX + (event.clientX - dragState.current.x),
+                  -maxOffsetX,
+                  maxOffsetX,
+                ),
+                y: clamp(
+                  dragState.current.startY + (event.clientY - dragState.current.y),
+                  -maxOffsetY,
+                  maxOffsetY,
+                ),
+              });
+            }}
+            onPointerUp={() => {
+              dragState.current = null;
+            }}
+            onPointerLeave={() => {
+              dragState.current = null;
+            }}
+          >
+            {previewUrl ? (
+              <img
+                src={previewUrl}
+                alt="Vista previa"
+                draggable={false}
+                style={{
+                  width: `${displayWidth / 10}%`,
+                  height: "auto",
+                  left: `calc(50% + ${normalizedOffset.x / 10}%)`,
+                  top: `calc(50% + ${normalizedOffset.y / 10}%)`,
+                  transform: "translate(-50%, -50%)",
+                }}
+              />
+            ) : null}
+            <div className="cropper-frame" />
+          </div>
+          <div className="cropper-controls">
+            <label>
+              <span>Zoom</span>
+              <input
+                type="range"
+                min="1"
+                max="3"
+                step="0.01"
+                value={zoom}
+                onChange={(event) => setZoom(Number(event.target.value))}
+              />
+            </label>
+            <div className="cropper-hint">
+              <b>Tip</b>
+              <p>Arrastra la imagen dentro del recuadro y luego guarda el recorte.</p>
+            </div>
+          </div>
+        </div>
+        <div className="sheet-footer">
+          <button className="button secondary" type="button" onClick={cancel}>
+            Cancelar
+          </button>
+          <button
+            className="button primary"
+            type="button"
+            onClick={async () => {
+              const cropped = await renderCroppedImage(task.file, {
+                aspect: task.aspect,
+                outputWidth: task.outputWidth,
+                outputHeight: task.outputHeight,
+                zoom,
+                offsetX: normalizedOffset.x,
+                offsetY: normalizedOffset.y,
+              });
+              confirm(cropped);
+            }}
+          >
+            Recortar y guardar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Field({
   label,
   value,
@@ -3581,8 +4831,10 @@ function Field({
 }) {
   return (
     <label className={wide ? "wide" : ""}>
-      {label}
-      {required && <em> *</em>}
+      <span className="field-label">
+        {label}
+        {required && <em>*</em>}
+      </span>
       <input
         type={type}
         value={value}
@@ -3601,17 +4853,23 @@ function ConfirmDialog({
   action,
   close,
   saving,
+  confirmLabel,
+  loadingLabel,
+  tone = "danger",
 }: {
   title: string;
   body: string;
-  action: () => void;
+  action: () => void | Promise<void>;
   close: () => void;
   saving: boolean;
+  confirmLabel?: string;
+  loadingLabel?: string;
+  tone?: "danger" | "primary";
 }) {
   return (
     <div className="modal-layer" role="alertdialog" aria-modal="true">
       <div className="confirm-box">
-        <span className="danger-icon">
+        <span className={tone === "primary" ? "danger-icon info" : "danger-icon"}>
           <Trash2 />
         </span>
         <h2>{title}</h2>
@@ -3621,11 +4879,13 @@ function ConfirmDialog({
             Cancelar
           </button>
           <button
-            className="button danger-fill"
-            onClick={action}
+            className={`button ${tone === "primary" ? "primary" : "danger-fill"}`}
+            onClick={() => void action()}
             disabled={saving}
           >
-            {saving ? "Eliminando…" : "Sí, eliminar"}
+            {saving
+              ? loadingLabel || "Procesando…"
+              : confirmLabel || "Sí, eliminar"}
           </button>
         </div>
       </div>
@@ -3725,6 +4985,16 @@ function hourLabel(value: string) {
 function timeOnly(value: string | null) {
   return value?.includes("T")
     ? value.split("T")[1]?.slice(0, 5) || "No disponible"
+    : "No disponible";
+}
+function tideDateKey(value: string | null) {
+  if (!value) return "";
+  if (value.includes("T")) return value.slice(0, 10);
+  return new Date(value).toISOString().slice(0, 10);
+}
+function tideTimeLabel(value: string | null) {
+  return value?.includes("T")
+    ? `${value.split("T")[1]?.slice(0, 5) || "--:--"} h`
     : "No disponible";
 }
 function tripCatches(id: string, catches: Catch[]) {
