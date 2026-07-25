@@ -4659,7 +4659,13 @@ function ImageCropModal({
   const [dimensions, setDimensions] = useState({ width: 1, height: 1 });
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const dragState = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
+  const dragState = useRef<{
+    x: number;
+    y: number;
+    startX: number;
+    startY: number;
+    pointerId: number;
+  } | null>(null);
   const cropWidth = 1000;
   const cropHeight = cropWidth / task.aspect;
   const baseScale = useMemo(
@@ -4721,16 +4727,20 @@ function ImageCropModal({
             className={`cropper-stage ${task.round ? "round" : ""}`}
             style={{ aspectRatio: `${task.aspect}` }}
             onPointerDown={(event) => {
+              event.preventDefault();
               (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
               dragState.current = {
                 x: event.clientX,
                 y: event.clientY,
                 startX: normalizedOffset.x,
                 startY: normalizedOffset.y,
+                pointerId: event.pointerId,
               };
             }}
             onPointerMove={(event) => {
-              if (!dragState.current) return;
+              if (!dragState.current || dragState.current.pointerId !== event.pointerId)
+                return;
+              event.preventDefault();
               setOffset({
                 x: clamp(
                   dragState.current.startX + (event.clientX - dragState.current.x),
@@ -4747,6 +4757,9 @@ function ImageCropModal({
             onPointerUp={() => {
               dragState.current = null;
             }}
+            onPointerCancel={() => {
+              dragState.current = null;
+            }}
             onPointerLeave={() => {
               dragState.current = null;
             }}
@@ -4757,11 +4770,11 @@ function ImageCropModal({
                 alt="Vista previa"
                 draggable={false}
                 style={{
-                  width: `${displayWidth / 10}%`,
-                  height: "auto",
-                  left: `calc(50% + ${normalizedOffset.x / 10}%)`,
-                  top: `calc(50% + ${normalizedOffset.y / 10}%)`,
-                  transform: "translate(-50%, -50%)",
+                  width: `${displayWidth}px`,
+                  height: `${displayHeight}px`,
+                  left: "50%",
+                  top: "50%",
+                  transform: `translate(-50%, -50%) translate(${normalizedOffset.x}px, ${normalizedOffset.y}px)`,
                 }}
               />
             ) : null}
