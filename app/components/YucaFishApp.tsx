@@ -771,15 +771,7 @@ function newTrip(): Trip {
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <div className={`brand ${compact ? "compact" : ""}`}>
-      <span className="brand-mark">
-        <img src="/favicon.svg" alt="GoFishing.mx" />
-      </span>
-      {!compact && (
-        <span>
-          <strong>GoFishing.mx</strong>
-          <small>Bitácora de pesca</small>
-        </span>
-      )}
+      <img className="brand-logo-full" src="/gofishing-logo.svg" alt="GoFishing.mx" />
     </div>
   );
 }
